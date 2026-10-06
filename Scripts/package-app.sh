@@ -14,9 +14,9 @@ staging_dir="$(mktemp -d "$project_dir/.build/package.XXXXXX")"
 trap '[[ -z "$staging_dir" ]] || rm -rf "$staging_dir"' EXIT
 staged_app="$staging_dir/三国杀 Ji.app"
 contents_dir="$staged_app/Contents"
-mkdir -p "$contents_dir/MacOS"
+mkdir -p "$contents_dir/MacOS" "$contents_dir/Resources"
 cp "$project_dir/.build/release/SanguoshaJi" "$contents_dir/MacOS/SanguoshaJi"
-cp -R "$project_dir/.build/release/SanguoshaJi_SanguoshaApp.bundle" "$staged_app/"
+cp "$project_dir/Sources/SanguoshaApp/Resources/CardArt.png" "$contents_dir/Resources/CardArt.png"
 cat > "$contents_dir/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -43,6 +43,8 @@ for size in 16 32 128 256 512; do
 done
 iconutil --convert icns --output "$contents_dir/Resources/AppIcon.icns" "$iconset_dir"
 plutil -replace CFBundleIconFile -string AppIcon "$contents_dir/Info.plist"
+codesign --force --sign - --timestamp=none "$staged_app"
+codesign --verify --deep --strict "$staged_app"
 # Never overwrite a running executable in place; macOS can kill it after its
 # signed code pages stop matching the on-disk binary.
 mkdir -p "$dist_dir" "$project_dir/.build/package-backups"

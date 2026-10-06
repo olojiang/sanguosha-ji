@@ -635,7 +635,9 @@ private struct CardIllustrationView: View {
     private let columns = 6
 
     private var artwork: Image? {
-        guard let url = Bundle.module.url(forResource: "CardArt", withExtension: "png"),
+        let url = Bundle.main.url(forResource: "CardArt", withExtension: "png")
+            ?? Bundle.module.url(forResource: "CardArt", withExtension: "png")
+        guard let url,
               let image = NSImage(contentsOf: url) else { return nil }
         return Image(nsImage: image)
     }
