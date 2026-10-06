@@ -17,5 +17,7 @@ public enum GameVoiceCue {
             || line.contains("使用锦囊【") || line.contains("打出【")
             || line.contains("装备了") || line.contains("以杀应对决斗")
             || line.contains("从五谷丰登中获得")
+            || line.contains("弃置了") && line.contains("【")
+            || line.contains("获得【") || line.contains("造成") || line.contains("击杀了")
     }
 }

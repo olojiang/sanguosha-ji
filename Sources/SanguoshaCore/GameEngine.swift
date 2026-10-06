@@ -288,9 +288,11 @@ public struct GameEngine {
         let needsTarget = [.snatch, .dismantle, .duel, .collateral, .indulgence].contains(card.kind)
         if needsTarget {
             guard let targetID, canTarget(targetID, with: card.kind, from: sourceID) else { throw GameError.outOfRange }
+            log.append("\(players[sourceID].name) 对 \(players[targetID].name) 使用锦囊【\(card.title)】。")
+        } else {
+            log.append("\(players[sourceID].name) 使用锦囊【\(card.title)】。")
         }
         players[sourceID].hand.remove(at: cardIndex)
-        log.append("\(players[sourceID].name) 使用锦囊【\(card.title)】。")
         switch card.kind {
         case .indulgence:
             guard let targetID else { throw GameError.invalidTarget }
@@ -316,8 +318,15 @@ public struct GameEngine {
         case .snatch, .dismantle:
             guard let targetID else { return }
             if let stolen = takeRandomCard(from: targetID) {
-                if card.kind == .snatch { players[sourceID].hand.append(stolen); log.append("获得了\(players[targetID].name) 的【\(stolen.title)】。") }
-                else { discardPile.append(stolen); log.append("弃置了\(players[targetID].name) 的【\(stolen.title)】。") }
+                if card.kind == .snatch {
+                    players[sourceID].hand.append(stolen)
+                    log.append("\(players[sourceID].name) 从 \(players[targetID].name) 处获得【\(stolen.title)】（顺手牵羊）。")
+                } else {
+                    discardPile.append(stolen)
+                    log.append("\(players[sourceID].name) 弃置了 \(players[targetID].name) 的【\(stolen.title)】（过河拆桥）。")
+                }
+            } else {
+                log.append("\(players[sourceID].name) 对 \(players[targetID].name) 使用【\(card.title)】，但目标没有可移动的牌。")
             }
         case .duel:
             if let targetID, let index = players[targetID].hand.firstIndex(where: { $0.kind == .slash }) {
@@ -338,7 +347,7 @@ public struct GameEngine {
         case .collateral:
             if let targetID, let weapon = players[targetID].equipment.removeValue(forKey: .weapon) {
                 discardPile.append(weapon)
-                log.append("借刀杀人：目标交出武器【\(weapon.title)】。")
+                log.append("\(players[sourceID].name) 对 \(players[targetID].name) 使用【借刀杀人】，本局简化结算弃置其武器【\(weapon.title)】。")
             }
         case .harvest:
             beginHarvest(from: sourceID)

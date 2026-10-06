@@ -53,6 +53,38 @@ final class GameEngineTests: XCTestCase {
         ])
     }
 
+    func testDismantleHistoryAndVoiceNameTheActorTargetAndDiscardedCard() throws {
+        var game = GameEngine.newGame(seed: 327, hands: [[.dismantle], [.peach], [], []])
+        try game.drawForTurn()
+        let trick = try XCTUnwrap(game.human.hand.first { $0.kind == .dismantle })
+        let targetName = game.players[1].general.title
+
+        try game.play(cardID: trick.id, targetID: 1)
+
+        let visible = GameLogPresentation.visibleLines(from: game.log, players: game.players)
+        let spoken = GameVoiceCue.spokenLines(from: game.log, players: game.players)
+        XCTAssertTrue(visible.contains("你 对 \(targetName) 使用锦囊【过河拆桥】。"), "\(visible)")
+        XCTAssertTrue(visible.contains("你 弃置了 \(targetName) 的【桃】（过河拆桥）。"), "\(visible)")
+        XCTAssertTrue(spoken.contains("我对\(targetName)使用锦囊【过河拆桥】。"), "\(spoken)")
+        XCTAssertTrue(spoken.contains("我弃置了\(targetName)的【桃】（过河拆桥）。"), "\(spoken)")
+    }
+
+    func testSnatchHistoryAndVoiceNameTheActorTargetAndTakenCard() throws {
+        var game = GameEngine.newGame(seed: 328, hands: [[.snatch], [.crossbow], [], []])
+        try game.drawForTurn()
+        let trick = try XCTUnwrap(game.human.hand.first { $0.kind == .snatch })
+        let targetName = game.players[1].general.title
+
+        try game.play(cardID: trick.id, targetID: 1)
+
+        let visible = GameLogPresentation.visibleLines(from: game.log, players: game.players)
+        let spoken = GameVoiceCue.spokenLines(from: game.log, players: game.players)
+        XCTAssertTrue(visible.contains("你 对 \(targetName) 使用锦囊【顺手牵羊】。"), "\(visible)")
+        XCTAssertTrue(visible.contains("你 从 \(targetName) 处获得【诸葛连弩】（顺手牵羊）。"), "\(visible)")
+        XCTAssertTrue(spoken.contains("我对\(targetName)使用锦囊【顺手牵羊】。"), "\(spoken)")
+        XCTAssertTrue(spoken.contains("我从\(targetName)处获得【诸葛连弩】（顺手牵羊）。"), "\(spoken)")
+    }
+
     func testHarvestChoiceIsAnnouncedWithTheCardName() {
         let event = "你 从五谷丰登中获得【杀】。"
         let player = Player(id: 0, name: "你", role: .lord, isHuman: true, general: .caoCao)
