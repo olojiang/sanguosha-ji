@@ -412,9 +412,6 @@ public struct GameEngine {
         case .duel:
             if let targetID {
                 phase = .awaitingDuelSlash(responderID: targetID, challengerID: sourceID)
-                if !players[targetID].isHuman {
-                    try? respondToDuel(withSlash: players[targetID].hand.contains { $0.kind == .slash })
-                }
             }
         case .barbarianInvasion, .arrows:
             pendingMassKind = card.kind

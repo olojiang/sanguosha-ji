@@ -141,6 +141,8 @@ final class GameEngineTests: XCTestCase {
         try game.play(cardID: duel.id, targetID: 1)
         for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
 
+        XCTAssertEqual(game.phase, .awaitingDuelSlash(responderID: 1, challengerID: 0))
+        XCTAssertTrue(game.advanceAI())
         XCTAssertEqual(game.phase, .awaitingDuelSlash(responderID: 0, challengerID: 1))
         try game.respondToDuel(withSlash: false)
 
@@ -576,6 +578,8 @@ final class GameEngineTests: XCTestCase {
         let duel = try XCTUnwrap(game.human.hand.first { $0.kind == .duel })
         try game.play(cardID: duel.id, targetID: 1)
         for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        XCTAssertTrue(game.players[1].hand.contains { $0.kind == .slash })
+        XCTAssertTrue(game.advanceAI())
 
         XCTAssertFalse(game.players[1].hand.contains { $0.kind == .slash })
         XCTAssertEqual(game.human.hp, game.human.maxHP)
