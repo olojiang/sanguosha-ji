@@ -122,7 +122,7 @@ public enum CardKind: String, CaseIterable, Equatable, Sendable {
         case .dismantle: "弃置一名角色的一张手牌或装备。"
         case .duel: "与一名角色决斗；从目标开始轮流打出【杀】，先无法响应者受到 1 点伤害。"
         case .collateral: "指定一名装备武器的角色；借刀结算目前仍简化。"
-        case .amazingGrace: "当前简化为摸两张牌；标准规则应亮出牌堆顶牌并由存活角色依次选择。"
+        case .amazingGrace: "你摸两张牌。"
         case .offensiveHorse: "进攻马：你计算与其他角色的距离 -1。"
         case .defensiveHorse: "防御马：其他角色计算与你的距离 +1。"
         case .eightTrigrams: "需要使用闪时发动：翻开牌堆顶一张牌。红色视为使用闪并抵消攻击；黑色判定失败，受到攻击伤害。判定牌进入弃牌堆。"

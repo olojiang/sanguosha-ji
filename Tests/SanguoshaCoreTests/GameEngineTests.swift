@@ -205,6 +205,10 @@ final class GameEngineTests: XCTestCase {
         }
     }
 
+    func testAmazingGraceTooltipMatchesItsImplementedDrawEffect() {
+        XCTAssertEqual(CardKind.amazingGrace.helpText, "你摸两张牌。")
+    }
+
     func testHarvestRevealsOneFaceUpCardPerLivingPlayerInSeatOrder() throws {
         var game = GameEngine.newGame(seed: 203, hands: [[.harvest], [], [], []])
         try game.drawForTurn()
@@ -504,6 +508,19 @@ final class GameEngineTests: XCTestCase {
 
         XCTAssertEqual(game.human.equipment.values.map(\.title), [weapon.title])
         XCTAssertFalse(game.human.hand.contains(where: { $0.id == weapon.id }))
+    }
+
+    func testReplacingEquipmentMovesTheOldCardToDiscardOnce() throws {
+        var game = GameEngine.newGame(seed: 785, hands: [[.crossbow, .axe], [], [], []])
+        try game.drawForTurn()
+        let crossbow = try XCTUnwrap(game.human.hand.first { $0.kind == .crossbow })
+        let axe = try XCTUnwrap(game.human.hand.first { $0.kind == .axe })
+
+        try game.play(cardID: crossbow.id)
+        try game.play(cardID: axe.id)
+
+        XCTAssertEqual(game.discardPile.filter { $0.id == crossbow.id }.count, 1)
+        XCTAssertEqual(game.human.equipment[.weapon]?.id, axe.id)
     }
 
     func testWeaponChangesAttackRangeAndTrickProducesVisibleAction() throws {
