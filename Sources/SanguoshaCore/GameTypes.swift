@@ -112,17 +112,17 @@ public enum CardKind: String, CaseIterable, Equatable, Sendable {
         case .peach: "出牌阶段回复自己 1 点体力；角色濒死时也可用于救援。"
         case .wine: "本回合下一张杀额外造成 1 点伤害。"
         case .lightning: "放入自己的判定区；下回合开始时结算，本版本简化为 1 点伤害。"
-        case .indulgence: "指定一名角色放入其判定区；其下回合可能跳过出牌阶段。"
+        case .indulgence: "指定一名角色放入其判定区；当前版本尚未翻判定牌，暂按跳过出牌阶段结算。"
         case .barbarianInvasion: "其他角色依次打出杀响应，否则受到 1 点伤害。"
         case .arrows: "其他角色依次打出闪响应，否则受到 1 点伤害。"
         case .harvest: "亮出等同存活角色数的牌；从使用者开始，按座次依次选择并获得一张。"
         case .godSalvation: "所有受伤角色各回复 1 点体力。"
-        case .nullification: "抵消一张锦囊；当前版本尚未实现反制响应窗口。"
+        case .nullification: "响应锦囊：抵消当前锦囊；其他角色可再用无懈可击反制。全部连续放弃后，按奇偶决定锦囊是否生效。"
         case .snatch: "获得距离 1 内一名角色的一张手牌或装备。"
         case .dismantle: "弃置一名角色的一张手牌或装备。"
-        case .duel: "与一名角色决斗；当前版本简化了连续出杀的结算。"
+        case .duel: "与一名角色决斗；从目标开始轮流打出【杀】，先无法响应者受到 1 点伤害。"
         case .collateral: "指定一名装备武器的角色；借刀结算目前仍简化。"
-        case .amazingGrace: "摸两张牌。"
+        case .amazingGrace: "当前简化为摸两张牌；标准规则应亮出牌堆顶牌并由存活角色依次选择。"
         case .offensiveHorse: "进攻马：你计算与其他角色的距离 -1。"
         case .defensiveHorse: "防御马：其他角色计算与你的距离 +1。"
         case .eightTrigrams: "需要使用闪时发动：翻开牌堆顶一张牌。红色视为使用闪并抵消攻击；黑色判定失败，受到攻击伤害。判定牌进入弃牌堆。"
@@ -316,6 +316,8 @@ public enum GamePhase: Equatable {
     case action
     case choosingHarvest(playerID: Int)
     case awaitingDodge(targetID: Int, attackerID: Int)
+    case awaitingDuelSlash(responderID: Int, challengerID: Int)
+    case respondingToTrick(responderID: Int)
     case dying(targetID: Int, responderID: Int)
     case gameOver
 }

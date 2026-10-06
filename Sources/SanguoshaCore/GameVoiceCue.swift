@@ -14,7 +14,7 @@ public enum GameVoiceCue {
 
     private static func isCardEvent(_ line: String) -> Bool {
         line.contains("使用杀") || line.contains("使用桃") || line.contains("使用酒")
-            || line.contains("使用锦囊【") || line.contains("打出【")
+            || line.contains("使用锦囊【") || line.contains("使用无懈可击") || line.contains("打出【")
             || line.contains("装备了") || line.contains("以杀应对决斗")
             || line.contains("从五谷丰登中获得")
             || line.contains("弃置了") && line.contains("【")

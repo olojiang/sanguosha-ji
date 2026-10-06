@@ -1,5 +1,13 @@
 import Foundation
 
+private struct PendingTrick {
+    let card: Card
+    let sourceID: Int
+    let targetID: Int?
+    var negationCount = 0
+    var passes = 0
+}
+
 public struct GameEngine {
     public private(set) var players: [Player]
     public private(set) var allCards: [Card]
@@ -25,6 +33,7 @@ public struct GameEngine {
     private var pendingHarvestPlayers: [Int] = []
     private var pendingHarvestTrick: Card?
     private var pendingHarvestSourceID: Int?
+    private var pendingTrick: PendingTrick?
 
     public static func newGame(seed: UInt64 = UInt64.random(in: 1...UInt64.max), hands: [[CardKind]]? = nil, startingHP: [Int]? = nil, humanGeneral: General? = .caoCao, humanRole: Role? = .lord, generalPool: [General] = [.caoCao, .simaYi, .zhangFei, .zhaoYun]) -> GameEngine {
         GameEngine(seed: seed, hands: hands, startingHP: startingHP, humanGeneral: humanGeneral, humanRole: humanRole, generalPool: generalPool)
@@ -84,6 +93,13 @@ public struct GameEngine {
         })
     }
     public var responseCardKind: CardKind { requiredResponse }
+    public var trickResponseSummary: String? {
+        guard let trick = pendingTrick else { return nil }
+        let source = players[trick.sourceID].isHuman ? "你" : players[trick.sourceID].general.title
+        guard let targetID = trick.targetID else { return "\(source) 使用【\(trick.card.title)】" }
+        let target = players[targetID].isHuman ? "你" : players[targetID].general.title
+        return "\(source) 对 \(target) 使用【\(trick.card.title)】"
+    }
 
     public static func eightTrigramsDodges(with suit: Suit) -> Bool { suit.isRed }
 
@@ -128,8 +144,10 @@ public struct GameEngine {
             if currentPlayer.general == .zhaoYun { try useSlash(at: cardIndex, targetID: targetID) }
             else { throw GameError.invalidCard }
         case .lightning, .indulgence, .barbarianInvasion, .arrows, .harvest, .godSalvation,
-             .nullification, .snatch, .dismantle, .duel, .collateral, .amazingGrace:
+             .snatch, .dismantle, .duel, .collateral, .amazingGrace:
             try useTrick(cardIndex: cardIndex, targetID: targetID)
+        case .nullification:
+            throw GameError.invalidCard
         default:
             try equip(cardIndex: cardIndex)
         }
@@ -210,6 +228,19 @@ public struct GameEngine {
     @discardableResult
     public mutating func advanceAI() -> Bool {
         guard winner == nil else { return false }
+        if case let .awaitingDuelSlash(responderID, _) = phase {
+            guard !players[responderID].isHuman else { return false }
+            try? respondToDuel(withSlash: players[responderID].hand.contains { $0.kind == .slash })
+            return true
+        }
+        if case let .respondingToTrick(responderID) = phase {
+            guard !players[responderID].isHuman else { return false }
+            let shouldNullify = players[responderID].hand.contains { $0.kind == .nullification }
+                && (pendingTrick?.negationCount.isMultiple(of: 2) == false
+                    || pendingTrick.map { !sameTeam(players[responderID].role, players[$0.sourceID].role) } == true)
+            try? respondToTrick(withNullification: shouldNullify)
+            return true
+        }
         if case let .choosingHarvest(playerID) = phase {
             guard !players[playerID].isHuman, let card = bestHarvestChoice(for: playerID) else { return false }
             try? chooseHarvest(cardID: card.id, by: playerID)
@@ -288,25 +319,75 @@ public struct GameEngine {
         let needsTarget = [.snatch, .dismantle, .duel, .collateral, .indulgence].contains(card.kind)
         if needsTarget {
             guard let targetID, canTarget(targetID, with: card.kind, from: sourceID) else { throw GameError.outOfRange }
-            log.append("\(players[sourceID].name) 对 \(players[targetID].name) 使用锦囊【\(card.title)】。")
-        } else {
-            log.append("\(players[sourceID].name) 使用锦囊【\(card.title)】。")
         }
         players[sourceID].hand.remove(at: cardIndex)
+        pendingTrick = PendingTrick(card: card, sourceID: sourceID, targetID: targetID)
+        phase = .respondingToTrick(responderID: nextLivingPlayer(after: sourceID))
+        log.append(needsTarget
+            ? "\(players[sourceID].name) 对 \(players[targetID!].name) 使用锦囊【\(card.title)】。"
+            : "\(players[sourceID].name) 使用锦囊【\(card.title)】。")
+        log.append("无懈可击响应窗口开启：其他角色可以反制【\(card.title)】。")
+    }
+
+    public mutating func respondToTrick(withNullification: Bool) throws {
+        guard case let .respondingToTrick(responderID) = phase, var trick = pendingTrick else { throw GameError.wrongPhase }
+        if withNullification {
+            guard let index = players[responderID].hand.firstIndex(where: { $0.kind == .nullification }) else { throw GameError.missingCard }
+            let card = players[responderID].hand.remove(at: index)
+            discardPile.append(card)
+            trick.negationCount += 1
+            trick.passes = 0
+            let targetDescription = trick.targetID.map { " 对 \(players[$0].name)" } ?? ""
+            log.append("\(players[responderID].name) 使用无懈可击，反制了\(players[trick.sourceID].name)\(targetDescription)使用的【\(trick.card.title)】。")
+        } else {
+            trick.passes += 1
+            log.append("\(players[responderID].name) 放弃使用无懈可击响应【\(trick.card.title)】。")
+        }
+        pendingTrick = trick
+        if trick.passes >= players.filter(\.isAlive).count {
+            pendingTrick = nil
+            phase = .action
+            if trick.negationCount.isMultiple(of: 2) {
+                resolveTrick(trick.card, sourceID: trick.sourceID, targetID: trick.targetID)
+            } else {
+                discardPile.append(trick.card)
+                log.append("【\(trick.card.title)】被无懈可击抵消，不结算效果。")
+                phase = .action
+            }
+        } else {
+            phase = .respondingToTrick(responderID: nextLivingPlayer(after: responderID))
+        }
+    }
+
+    public mutating func respondToDuel(withSlash: Bool) throws {
+        guard case let .awaitingDuelSlash(responderID, challengerID) = phase else { throw GameError.wrongPhase }
+        if withSlash {
+            guard let index = players[responderID].hand.firstIndex(where: { $0.kind == .slash }) else { throw GameError.missingCard }
+            discardPile.append(players[responderID].hand.remove(at: index))
+            log.append("\(players[responderID].name) 对 \(players[challengerID].name) 使用杀，继续决斗。")
+            phase = .awaitingDuelSlash(responderID: challengerID, challengerID: responderID)
+        } else {
+            log.append("\(players[responderID].name) 无法对 \(players[challengerID].name) 的决斗打出杀，受到 1 点伤害。")
+            phase = .action
+            dealDamage(to: responderID, from: challengerID, amount: 1, cause: "决斗")
+        }
+    }
+
+    private mutating func resolveTrick(_ card: Card, sourceID: Int, targetID: Int?) {
+        phase = .action
         switch card.kind {
         case .indulgence:
-            guard let targetID else { throw GameError.invalidTarget }
+            guard let targetID else { return }
             players[targetID].delayedTricks.append(card)
             log.append("乐不思蜀进入\(players[targetID].name) 的判定区。")
         case .lightning:
             players[sourceID].delayedTricks.append(card)
             log.append("闪电进入\(players[sourceID].name) 的判定区。")
-        case .nullification:
-            players[sourceID].hand.append(card)
-            log.append("无懈可击等待响应锦囊。")
         case .harvest:
             pendingHarvestTrick = card
             pendingHarvestSourceID = sourceID
+        case .nullification:
+            return
         default:
             discardPile.append(card)
         }
@@ -329,14 +410,11 @@ public struct GameEngine {
                 log.append("\(players[sourceID].name) 对 \(players[targetID].name) 使用【\(card.title)】，但目标没有可移动的牌。")
             }
         case .duel:
-            if let targetID, let index = players[targetID].hand.firstIndex(where: { $0.kind == .slash }) {
-                let response = players[targetID].hand.remove(at: index)
-                discardPile.append(response)
-                log.append("\(players[targetID].name) 以杀应对决斗；简化结算由发起者受到伤害。")
-                dealDamage(to: sourceID, from: targetID, amount: 1, cause: "决斗")
-            } else if let targetID {
-                log.append("\(players[targetID].name) 无杀响应决斗。")
-                dealDamage(to: targetID, from: sourceID, amount: 1, cause: "决斗")
+            if let targetID {
+                phase = .awaitingDuelSlash(responderID: targetID, challengerID: sourceID)
+                if !players[targetID].isHuman {
+                    try? respondToDuel(withSlash: players[targetID].hand.contains { $0.kind == .slash })
+                }
             }
         case .barbarianInvasion, .arrows:
             pendingMassKind = card.kind
@@ -351,8 +429,7 @@ public struct GameEngine {
             }
         case .harvest:
             beginHarvest(from: sourceID)
-        case .nullification: break
-        default: throw GameError.invalidCard
+        default: return
         }
         if players[sourceID].general == .huangYueYing,
            ![.lightning, .indulgence, .nullification, .harvest].contains(card.kind) {
@@ -471,10 +548,10 @@ public struct GameEngine {
             return true
         }
         if let trick = players[id].hand.first(where: {
-            [.amazingGrace, .godSalvation, .snatch, .dismantle, .indulgence, .lightning, .barbarianInvasion, .arrows, .harvest].contains($0.kind)
+            [.amazingGrace, .godSalvation, .snatch, .dismantle, .duel, .indulgence, .lightning, .barbarianInvasion, .arrows, .harvest].contains($0.kind)
         }) {
-            let target = [.snatch, .dismantle, .indulgence].contains(trick.kind) ? aiTarget(for: id) : nil
-            let targetNeeded = [.snatch, .dismantle, .indulgence].contains(trick.kind)
+            let target = [.snatch, .dismantle, .duel, .indulgence].contains(trick.kind) ? aiTarget(for: id) : nil
+            let targetNeeded = [.snatch, .dismantle, .duel, .indulgence].contains(trick.kind)
             if !targetNeeded || target != nil {
                 try? play(cardID: trick.id, targetID: target)
                 return true

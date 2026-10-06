@@ -218,6 +218,30 @@ private struct ContentView: View {
                 }
                 .padding(12).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
             }
+            if case .respondingToTrick(responderID: 0) = game.phase {
+                HStack {
+                    Text("是否打出无懈可击，抵消\(game.trickResponseSummary ?? "当前锦囊")？")
+                    Spacer()
+                    Button("不使用") { respondToTrick(useNullification: false) }
+                        .buttonStyle(.bordered).disabled(isVoiceSpeaking || isAIPlaying)
+                    Button("打出无懈可击") { respondToTrick(useNullification: true) }
+                        .buttonStyle(.borderedProminent).tint(.blue)
+                        .disabled(!game.human.hand.contains { $0.kind == .nullification } || isVoiceSpeaking || isAIPlaying)
+                }
+                .padding(12).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            }
+            if case let .awaitingDuelSlash(responderID, challengerID) = game.phase, responderID == 0 {
+                HStack {
+                    Text("你正在与\(game.players[challengerID].name)决斗：打出【杀】或受到 1 点伤害。")
+                    Spacer()
+                    Button("不出杀") { respondToDuel(useSlash: false) }
+                        .buttonStyle(.bordered).disabled(isVoiceSpeaking || isAIPlaying)
+                    Button("打出杀") { respondToDuel(useSlash: true) }
+                        .buttonStyle(.borderedProminent).tint(.blue)
+                        .disabled(!game.human.hand.contains { $0.kind == .slash } || isVoiceSpeaking || isAIPlaying)
+                }
+                .padding(12).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            }
             if case let .dying(targetID, responderID) = game.phase, responderID == 0 {
                 HStack {
                     Text("\(game.players[targetID].name) 濒死了。你可以打出桃救援。")
@@ -367,7 +391,7 @@ private struct ContentView: View {
             case .action:
                 Button { finishTurn() } label: { Label("结束回合", systemImage: "arrow.right.circle.fill") }
                     .buttonStyle(.borderedProminent).tint(Color(red: 0.65, green: 0.31, blue: 0.18)).controlSize(.large)
-            case .choosingHarvest, .awaitingDodge, .dying, .gameOver: EmptyView()
+            case .choosingHarvest, .awaitingDodge, .awaitingDuelSlash, .respondingToTrick, .dying, .gameOver: EmptyView()
             }
         }
         .disabled(isAIPlaying || isVoiceSpeaking || game.currentPlayerID != 0)
@@ -472,6 +496,8 @@ private struct ContentView: View {
         case .action: "出牌阶段：使用基本牌、锦囊或装备。选中需要目标的牌后，点一名角色。"
         case .choosingHarvest(let playerID): "五谷丰登：轮到\(game.players[playerID].name)选择一张亮出的牌。"
         case .awaitingDodge: "响应阶段：可以打出【\(game.responseCardKind.title)】，或承受伤害。"
+        case .respondingToTrick: "无懈可击响应：可打出【无懈可击】抵消锦囊，也可以放弃响应。"
+        case .awaitingDuelSlash: "决斗响应：双方轮流打出【杀】；无法响应的一方受到 1 点伤害。"
         case .dying: "濒死阶段：按顺序询问是否使用桃救援。"
         case .gameOver: winnerMessage
         }
@@ -513,6 +539,16 @@ private struct ContentView: View {
     private func respondToSlash(useDodge: Bool) {
         run { try game.respondToSlash(withDodge: useDodge) }
         game.continueAfterHumanResponse()
+        startAIPlayback()
+    }
+
+    private func respondToTrick(useNullification: Bool) {
+        run { try game.respondToTrick(withNullification: useNullification) }
+        startAIPlayback()
+    }
+
+    private func respondToDuel(useSlash: Bool) {
+        run { try game.respondToDuel(withSlash: useSlash) }
         startAIPlayback()
     }
 
