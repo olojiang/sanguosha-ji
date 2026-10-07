@@ -157,10 +157,15 @@ private struct ContentView: View {
     private func playerTile(_ id: Int) -> some View {
         let player = game.players[id]
         let isTurn = game.currentPlayerID == id && game.winner == nil
-        let canTarget = selectedTargetCard.map { game.phase == .action && game.canTarget(id, with: $0.kind, from: 0) } ?? false
+        let collateralOwnerID = choosingCollateralWeaponOwnerID
+        let isCollateralVictim = collateralOwnerID.map { game.canTarget(id, with: .slash, from: $0) } ?? false
+        let canTarget = isCollateralVictim || (selectedTargetCard.map { game.phase == .action && game.canTarget(id, with: $0.kind, from: 0) } ?? false)
         let isRecentAction = game.log.suffix(3).contains { $0.contains(player.name) }
         let isDamaged = damagedPlayers.contains(id)
-        return Button { if canTarget { playSelected(on: id) } } label: {
+        return Button {
+            if isCollateralVictim { chooseCollateralTarget(id) }
+            else if canTarget { playSelected(on: id) }
+        } label: {
             HStack(spacing: 12) {
                 ZStack {
                     Circle().fill(player.isAlive ? Color(red: 0.55, green: 0.32, blue: 0.19) : .gray.opacity(0.3))
@@ -202,7 +207,8 @@ private struct ContentView: View {
                 }
                 Spacer(minLength: 0)
                 if !player.isAlive { Text("阵亡").font(.caption).foregroundStyle(.gray) }
-                else if canTarget { Text("攻击").font(.caption.weight(.bold)).foregroundStyle(.orange) }
+                else if isCollateralVictim { Text("借刀目标").font(.caption.weight(.bold)).foregroundStyle(.orange) }
+                else if canTarget { Text(selectedTargetCard?.kind == .collateral ? "持刀角色" : "攻击").font(.caption.weight(.bold)).foregroundStyle(.orange) }
             }
             .padding(10).frame(maxWidth: .infinity, minHeight: 78)
             .background(RoundedRectangle(cornerRadius: 16).fill(isDamaged ? Color.red.opacity(0.28) : (isTurn ? Color.white.opacity(0.14) : Color.black.opacity(0.18))))
@@ -283,6 +289,19 @@ private struct ContentView: View {
                 }
                 .padding(12).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
             }
+            if case let .awaitingCollateralSlash(sourceID, weaponOwnerID, targetID) = game.phase,
+               weaponOwnerID == 0 {
+                HStack {
+                    Label("借刀杀人：对\(game.players[targetID].general.title)使用杀，或把武器交给\(game.players[sourceID].general.title)。", systemImage: "arrowshape.turn.up.right")
+                    Spacer()
+                    Button { respondToCollateral(useSlash: false) } label: { Label("交出武器", systemImage: "arrowshape.turn.up.right") }
+                        .buttonStyle(.bordered).disabled(isVoiceSpeaking || isAIPlaying)
+                    Button { respondToCollateral(useSlash: true) } label: { Label("打出杀", systemImage: "hand.raised.fill") }
+                        .buttonStyle(.borderedProminent).tint(.blue)
+                        .disabled(!game.human.hand.contains { $0.kind == .slash } || isVoiceSpeaking || isAIPlaying)
+                }
+                .padding(12).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            }
             if case let .dying(targetID, responderID) = game.phase, responderID == 0 {
                 HStack {
                     Text("\(game.players[targetID].name) 濒死了。你可以打出桃救援。")
@@ -294,7 +313,9 @@ private struct ContentView: View {
                 .padding(12).background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
             }
             Group {
-                if case let .choosingHarvest(playerID) = game.phase, playerID == 0 {
+                if case let .choosingTargetCard(sourceID: 0, targetID, kind) = game.phase {
+                    targetCardSelectionView(targetID: targetID, kind: kind)
+                } else if case let .choosingHarvest(playerID) = game.phase, playerID == 0 {
                     harvestSelectionView
                 } else {
                     HStack(alignment: .bottom, spacing: 16) {
@@ -310,10 +331,11 @@ private struct ContentView: View {
                             cardHoverHelp
                             ScrollView(.horizontal) {
                                 HStack(spacing: 12) { ForEach(orderedHand) { card in cardButton(card) } }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 18)
                                     .animation(.spring(response: 0.38, dampingFraction: 0.78), value: game.human.hand.map(\.id))
                             }
                             .scrollIndicators(.hidden)
-                            .padding(.vertical, 8)
                             .frame(height: 222)
                         }
                         Spacer(minLength: 4)
@@ -330,11 +352,7 @@ private struct ContentView: View {
         let chosen = selectedCardID == card.id
         let hovering = hoveredCardID == card.id
         return Button { select(card) } label: {
-            cardFace(card, chosen: chosen || hovering, isHarvest: false)
-                .scaleEffect(hovering ? 1.07 : 1)
-                .offset(y: hovering || chosen ? -6 : 0)
-                .shadow(color: hovering || chosen ? .orange.opacity(0.38) : .clear, radius: hovering ? 14 : 9, y: 5)
-                .zIndex(hovering ? 2 : 0)
+            cardFace(card, selected: chosen, isHovered: hovering, isHarvest: false)
         }
         .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .scale(scale: 0.75)).combined(with: .opacity), removal: .scale(scale: 0.85).combined(with: .opacity)))
         .contentShape(RoundedRectangle(cornerRadius: 12))
@@ -371,8 +389,10 @@ private struct ContentView: View {
                 HStack(spacing: 12) {
                     ForEach(game.harvestChoices) { card in harvestChoiceButton(card) }
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 18)
             }
-            .scrollIndicators(.hidden).padding(.vertical, 8).frame(height: 222)
+            .scrollIndicators(.hidden).frame(height: 222)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -385,11 +405,7 @@ private struct ContentView: View {
             run { try game.chooseHarvest(cardID: card.id, by: 0) }
             startAIPlayback()
         } label: {
-            cardFace(card, chosen: hovering, isHarvest: true)
-                .scaleEffect(hovering ? 1.07 : 1)
-                .offset(y: hovering ? -6 : 0)
-                .shadow(color: hovering ? .orange.opacity(0.38) : .clear, radius: 14, y: 5)
-                .zIndex(hovering ? 2 : 0)
+            cardFace(card, selected: false, isHovered: hovering, isHarvest: true)
         }
         .buttonStyle(.plain)
         .onHover { hoveredCardID = $0 ? card.id : nil }
@@ -399,10 +415,11 @@ private struct ContentView: View {
         .accessibilityIdentifier("harvest-choice-\(card.id)")
     }
 
-    private func cardFace(_ card: Card, chosen: Bool, isHarvest: Bool) -> some View {
+    private func cardFace(_ card: Card, selected: Bool, isHovered: Bool, isHarvest: Bool) -> some View {
         VStack(spacing: 5) {
             CardIllustrationView(index: card.kind.illustrationIndex)
                 .frame(width: 112, height: 132)
+                .scaleEffect(isHovered && !reduceMotion ? 1.035 : 1)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .allowsHitTesting(false)
             Text(card.title)
@@ -412,8 +429,9 @@ private struct ContentView: View {
         }
         .frame(width: 142, height: 184)
         .foregroundStyle(isHarvest ? Color.black : card.kind == .dodge ? Color.blue : card.kind == .peach ? Color.red : Color.black)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(red: 0.94, green: 0.91, blue: 0.82)))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(chosen ? .orange : .white.opacity(0.5), lineWidth: chosen ? 2.5 : 1))
+        .background(RoundedRectangle(cornerRadius: 14).fill(isHovered ? Color(red: 0.99, green: 0.95, blue: 0.85) : Color(red: 0.94, green: 0.91, blue: 0.82)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected || isHovered ? .orange : .white.opacity(0.5), lineWidth: selected || isHovered ? 2.5 : 1))
+        .shadow(color: isHovered ? .orange.opacity(0.32) : .clear, radius: 12, y: 4)
     }
 
     private var orderedHand: [Card] {
@@ -434,6 +452,77 @@ private struct ContentView: View {
         reordered.swapAt(index, target)
         if reduceMotion { handOrder = reordered }
         else { withAnimation(.spring(response: 0.28, dampingFraction: 0.76)) { handOrder = reordered } }
+    }
+
+    private func targetCardSelectionView(targetID: Int, kind: CardKind) -> some View {
+        let target = game.players[targetID]
+        return VStack(alignment: .leading, spacing: 8) {
+            Label("\(kind.title)：选择\(target.general.title)区域中的一张牌", systemImage: "hand.tap")
+                .font(.headline).foregroundStyle(.orange)
+            Text("暗置手牌不会公开牌面；装备区和判定区的牌会显示名称。")
+                .font(.caption).foregroundStyle(.white.opacity(0.68))
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
+                    ForEach(game.targetCardOptions) { option in targetCardOptionButton(option) }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 18)
+            }
+            .scrollIndicators(.hidden)
+            .frame(height: 250)
+        }
+        .padding(12)
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func targetCardOptionButton(_ option: TargetCardOption) -> some View {
+        Button { chooseTargetCard(option.id) } label: {
+            Group {
+                if option.zone.isHidden {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14).fill(
+                            LinearGradient(colors: [Color(red: 0.22, green: 0.34, blue: 0.34), Color(red: 0.08, green: 0.17, blue: 0.18)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                        RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.35), lineWidth: 1).padding(7)
+                        VStack(spacing: 9) {
+                            Image(systemName: "questionmark.square.dashed").font(.system(size: 36, weight: .light))
+                            Text("暗置手牌").font(.headline)
+                            Text("选择此张").font(.caption)
+                        }
+                        .foregroundStyle(.white.opacity(0.85))
+                    }
+                    .frame(width: 142, height: 184)
+                } else {
+                    VStack(spacing: 4) {
+                        cardFace(option.card, selected: false, isHovered: false, isHarvest: true)
+                        Text(option.zone.title).font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.78))
+                    }
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .help(option.zone.isHidden ? "选择一张暗置手牌；牌面不会公开。" : "\(option.card.kind.tooltipText) · \(option.zone.title)")
+        .accessibilityLabel(option.zone.isHidden ? "选择一张暗置手牌" : "选择\(option.zone.title)的\(option.card.title)")
+    }
+
+    private func chooseTargetCard(_ id: Int) {
+        run { try game.chooseTargetCard(cardID: id) }
+        startAIPlayback()
+    }
+
+    private var choosingCollateralWeaponOwnerID: Int? {
+        guard case let .choosingCollateralTarget(_, weaponOwnerID) = game.phase else { return nil }
+        return weaponOwnerID
+    }
+
+    private func chooseCollateralTarget(_ id: Int) {
+        run { try game.chooseCollateralTarget(id) }
+        startAIPlayback()
+    }
+
+    private func respondToCollateral(useSlash: Bool) {
+        run { try game.respondToCollateral(withSlash: useSlash) }
+        startAIPlayback()
     }
 
     private var cardHoverHelp: some View {
@@ -474,7 +563,8 @@ private struct ContentView: View {
             case .action:
                 Button { finishTurn() } label: { Label("结束回合", systemImage: "arrow.right.circle.fill") }
                     .buttonStyle(.borderedProminent).tint(Color(red: 0.65, green: 0.31, blue: 0.18)).controlSize(.large)
-            case .choosingHarvest, .awaitingDodge, .awaitingDuelSlash, .respondingToTrick, .dying, .gameOver: EmptyView()
+            case .choosingHarvest, .choosingTargetCard, .choosingCollateralTarget, .awaitingCollateralSlash,
+                 .awaitingDodge, .awaitingDuelSlash, .respondingToTrick, .dying, .gameOver: EmptyView()
             }
         }
         .disabled(isAIPlaying || isVoiceSpeaking || game.currentPlayerID != 0)
@@ -578,6 +668,9 @@ private struct ContentView: View {
         case .drawing: "摸牌阶段：点右下角摸两张牌。"
         case .action: "出牌阶段：使用基本牌、锦囊或装备。选中需要目标的牌后，点一名角色。"
         case .choosingHarvest(let playerID): "五谷丰登：轮到\(game.players[playerID].name)选择一张亮出的牌。"
+        case let .choosingTargetCard(_, targetID, kind): "\(kind.title)：选择\(game.players[targetID].general.title)区域中的一张手牌、装备或判定牌。"
+        case let .choosingCollateralTarget(_, weaponOwnerID): "借刀杀人：选择\(game.players[weaponOwnerID].general.title)攻击范围内的一名角色。"
+        case let .awaitingCollateralSlash(_, weaponOwnerID, targetID): "\(game.players[weaponOwnerID].general.title)需对\(game.players[targetID].general.title)使用杀，否则交出武器。"
         case .awaitingDodge: "响应阶段：可以打出【\(game.responseCardKind.title)】，或承受伤害。"
         case .respondingToTrick: "无懈可击响应：可打出【无懈可击】抵消锦囊，也可以放弃响应。"
         case .awaitingDuelSlash: "决斗响应：双方轮流打出【杀】；无法响应的一方受到 1 点伤害。"
@@ -813,7 +906,7 @@ private struct RulesView: View {
                 ruleSection("怎样判断身份", "反贼通常会攻击主公。忠臣会帮助主公，但也可能暂时不暴露身份。内奸需要控制局势，避免过早成为众矢之的。看行动和出牌，不要只看一次攻击。")
                 ruleSection("牌堆与装备", "标准牌堆共 108 张，含基本牌 53 张、锦囊牌 36 张、装备牌 19 张；每张牌都有标准花色和点数。武器调整攻击范围，进攻马与防御马调整距离。需要打闪时，八卦阵翻开牌堆顶一张牌：红色视为闪并抵消攻击，黑色判定失败并受到伤害；翻出的判定牌会进入弃牌堆。")
                 ruleSection("身份局人数", "4 人：1 主、1 忠、1 反、1 内。5 人：1 主、1 忠、2 反、1 内。6 人：1 主、1 忠、3 反、1 内。7 人：1 主、2 忠、3 反、1 内。8 人：1 主、2 忠、4 反、1 内。")
-                ruleSection("当前规则边界", "目前仍有规则缺口：闪电与乐不思蜀没有按牌面判定结算；多目标锦囊的无懈可击没有逐目标开窗；借刀杀人没有完整的出杀/交刀流程；多数武将技能和多种武器、防具特效尚未实现。详细清单见项目 README。")
+                ruleSection("当前规则边界", "闪电与乐不思蜀会按判定牌结算；过河拆桥、顺手牵羊可选目标区域中的具体牌；借刀杀人会让持刀者对你指定的目标出杀或交出武器。仍有缺口：多目标锦囊的无懈可击没有逐目标开窗；多数武将技能和多种武器、防具特效尚未实现。详细清单见项目 README。")
                 Text("规则参考").font(.headline)
                 Link("三国杀官方 FAQ：身份局获胜条件", destination: URL(string: "https://www.sanguosha.com/faq.html")!)
                 Link("三国杀官方模式说明：身份场人数", destination: URL(string: "https://www.sanguosha.com/mode")!)

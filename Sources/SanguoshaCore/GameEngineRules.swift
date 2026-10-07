@@ -23,15 +23,30 @@ extension GameEngine {
     public func canTarget(_ targetID: Int, with kind: CardKind, from sourceID: Int) -> Bool {
         guard players.indices.contains(sourceID), players.indices.contains(targetID), players[sourceID].isAlive,
               players[targetID].isAlive, targetID != sourceID else { return false }
-        if kind == .duel, players[targetID].general == .zhugeLiang, players[targetID].hand.isEmpty { return false }
+        if [.slash, .dodge, .duel].contains(kind),
+           players[targetID].general == .zhugeLiang, players[targetID].hand.isEmpty { return false }
         return switch kind {
         case .slash, .dodge: isLegalTarget(targetID, from: sourceID)
-        case .snatch: distance(from: sourceID, to: targetID) == 1
-        case .dismantle, .duel: true
+        case .snatch: distance(from: sourceID, to: targetID) == 1 && hasMovableCard(targetID)
+        case .dismantle: hasMovableCard(targetID)
+        case .duel: true
         case .indulgence: !players[targetID].delayedTricks.contains { $0.kind == .indulgence }
-        case .collateral: players[targetID].equipment[.weapon] != nil
+        case .collateral: players[targetID].equipment[.weapon] != nil && !collateralCandidates(for: targetID).isEmpty
         default: false
         }
+    }
+
+    func hasMovableCard(_ playerID: Int) -> Bool {
+        !players[playerID].hand.isEmpty || !players[playerID].equipment.isEmpty || !players[playerID].delayedTricks.isEmpty
+    }
+
+    public var collateralTargetCandidates: [Int] {
+        guard case let .choosingCollateralTarget(_, weaponOwnerID) = phase else { return [] }
+        return collateralCandidates(for: weaponOwnerID)
+    }
+
+    func collateralCandidates(for weaponOwnerID: Int) -> [Int] {
+        players.indices.filter { canTarget($0, with: .slash, from: weaponOwnerID) }
     }
 
 }

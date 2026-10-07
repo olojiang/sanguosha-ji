@@ -35,11 +35,11 @@ public struct GameEngine {
     private var pendingHarvestSourceID: Int?
     private var pendingTrick: PendingTrick?
 
-    public static func newGame(seed: UInt64 = UInt64.random(in: 1...UInt64.max), hands: [[CardKind]]? = nil, startingHP: [Int]? = nil, humanGeneral: General? = .caoCao, humanRole: Role? = .lord, generalPool: [General] = [.caoCao, .simaYi, .zhangFei, .zhaoYun], playerCount: Int = 4) -> GameEngine {
-        GameEngine(seed: seed, hands: hands, startingHP: startingHP, humanGeneral: humanGeneral, humanRole: humanRole, generalPool: generalPool, playerCount: playerCount)
+    public static func newGame(seed: UInt64 = UInt64.random(in: 1...UInt64.max), hands: [[CardKind]]? = nil, startingHP: [Int]? = nil, startingEquipment: [[CardKind]]? = nil, startingDelayedTricks: [[CardKind]]? = nil, humanGeneral: General? = .caoCao, humanRole: Role? = .lord, generalPool: [General] = [.caoCao, .simaYi, .zhangFei, .zhaoYun], playerCount: Int = 4) -> GameEngine {
+        GameEngine(seed: seed, hands: hands, startingHP: startingHP, startingEquipment: startingEquipment, startingDelayedTricks: startingDelayedTricks, humanGeneral: humanGeneral, humanRole: humanRole, generalPool: generalPool, playerCount: playerCount)
     }
 
-    private init(seed: UInt64, hands: [[CardKind]]?, startingHP: [Int]?, humanGeneral: General?, humanRole: Role?, generalPool: [General], playerCount: Int) {
+    private init(seed: UInt64, hands: [[CardKind]]?, startingHP: [Int]?, startingEquipment: [[CardKind]]?, startingDelayedTricks: [[CardKind]]?, humanGeneral: General?, humanRole: Role?, generalPool: [General], playerCount: Int) {
         random = SeededGenerator(seed: seed)
         let count = IdentityConfiguration.supportedPlayerCounts.contains(playerCount) ? playerCount : 4
         var roles = IdentityConfiguration.roles(forPlayerCount: count)!
@@ -79,6 +79,23 @@ public struct GameEngine {
                 }
             }
         }
+        if let startingEquipment, startingEquipment.count == players.count {
+            for (playerID, kinds) in startingEquipment.enumerated() {
+                for kind in kinds {
+                    guard let slot = kind.equipmentSlot, players[playerID].equipment[slot] == nil else { continue }
+                    let physical = cards.removeFirst()
+                    players[playerID].equipment[slot] = Card(id: physical.id, kind: kind, suit: physical.suit, rank: physical.rank)
+                }
+            }
+        }
+        if let startingDelayedTricks, startingDelayedTricks.count == players.count {
+            for (playerID, kinds) in startingDelayedTricks.enumerated() {
+                for kind in kinds where [.lightning, .indulgence].contains(kind) {
+                    let physical = cards.removeFirst()
+                    players[playerID].delayedTricks.append(Card(id: physical.id, kind: kind, suit: physical.suit, rank: physical.rank))
+                }
+            }
+        }
         drawPile = cards
     }
 
@@ -102,24 +119,17 @@ public struct GameEngine {
         return "\(source) 对 \(target) 使用【\(trick.card.title)】"
     }
 
+    public var targetCardOptions: [TargetCardOption] {
+        guard case let .choosingTargetCard(_, targetID, _) = phase else { return [] }
+        return targetOptions(for: targetID)
+    }
+
     public static func eightTrigramsDodges(with suit: Suit) -> Bool { suit.isRed }
 
     public mutating func drawForTurn() throws {
         guard phase == .drawing, currentPlayer.isAlive else { throw GameError.wrongPhase }
-        let delayed = players[currentPlayerID].delayedTricks
-        players[currentPlayerID].delayedTricks.removeAll()
-        var skipsAction = false
-        for card in delayed {
-            discardPile.append(card)
-            if card.kind == .indulgence {
-                skipsAction = true
-                log.append("\(currentPlayer.name) 判定乐不思蜀，本回合跳过出牌阶段。")
-            } else if card.kind == .lightning {
-                log.append("\(currentPlayer.name) 结算闪电判定。")
-                dealDamage(to: currentPlayerID, from: currentPlayerID, amount: 1, cause: "闪电")
-                if case .dying = phase { return }
-            }
-        }
+        let skipsAction = resolveDelayedTricks(for: currentPlayerID)
+        if case .dying = phase { return }
         let drawCount = currentPlayer.general == .zhouYu ? 3 : (currentPlayer.general == .xuChu ? 1 : 2)
         draw(drawCount, for: currentPlayerID)
         phase = .action
@@ -167,9 +177,10 @@ public struct GameEngine {
             dodged = judgeEightTrigrams(for: targetID, against: attackerID, attack: "杀")
         }
         if !dodged {
-            dealDamage(to: targetID, from: attackerID, amount: nextSlashDamage, cause: "杀")
+            let damage = attackerID == currentPlayerID ? nextSlashDamage : 1
+            dealDamage(to: targetID, from: attackerID, amount: damage, cause: "杀")
         }
-        nextSlashDamage = 1
+        if attackerID == currentPlayerID { nextSlashDamage = 1 }
         if winner != nil { phase = .gameOver }
         else if case .dying = phase { return }
         else if !pendingMassTargets.isEmpty { resolveNextMassTarget() }
@@ -203,6 +214,45 @@ public struct GameEngine {
             phase = .choosingHarvest(playerID: nextPlayer)
         } else {
             finishHarvest()
+        }
+    }
+
+    public mutating func chooseTargetCard(cardID: Int) throws {
+        guard case let .choosingTargetCard(sourceID, targetID, kind) = phase, sourceID == 0 else {
+            throw GameError.wrongPhase
+        }
+        guard [.snatch, .dismantle].contains(kind), targetCardOptions.contains(where: { $0.id == cardID }),
+              let card = removeTargetCard(cardID, from: targetID) else { throw GameError.invalidCard }
+        moveChosenCard(card, from: targetID, to: sourceID, using: kind)
+        phase = .action
+    }
+
+    public mutating func chooseCollateralTarget(_ targetID: Int) throws {
+        guard case let .choosingCollateralTarget(sourceID, weaponOwnerID) = phase,
+              collateralTargetCandidates.contains(targetID) else { throw GameError.invalidTarget }
+        phase = .awaitingCollateralSlash(sourceID: sourceID, weaponOwnerID: weaponOwnerID, targetID: targetID)
+        if !players[weaponOwnerID].isHuman {
+            try respondToCollateral(withSlash: players[weaponOwnerID].hand.contains { $0.kind == .slash })
+        }
+    }
+
+    public mutating func respondToCollateral(withSlash: Bool) throws {
+        guard case let .awaitingCollateralSlash(sourceID, weaponOwnerID, targetID) = phase else {
+            throw GameError.wrongPhase
+        }
+        if withSlash, let slashIndex = players[weaponOwnerID].hand.firstIndex(where: { $0.kind == .slash }),
+           canTarget(targetID, with: .slash, from: weaponOwnerID) {
+            discardPile.append(players[weaponOwnerID].hand.remove(at: slashIndex))
+            log.append("\(players[weaponOwnerID].name) 对 \(players[targetID].name) 使用杀（借刀杀人）。")
+            requiredResponse = .dodge
+            phase = .awaitingDodge(targetID: targetID, attackerID: weaponOwnerID)
+            if !players[targetID].isHuman { try respondToSlash(withDodge: canRespond(for: targetID)) }
+        } else if let weapon = players[weaponOwnerID].equipment.removeValue(forKey: .weapon) {
+            players[sourceID].hand.append(weapon)
+            log.append("\(players[weaponOwnerID].name) 未能对 \(players[targetID].name) 使用杀，将【\(weapon.title)】交给\(players[sourceID].name)（借刀杀人）。")
+            phase = .action
+        } else {
+            phase = .action
         }
     }
 
@@ -276,9 +326,16 @@ public struct GameEngine {
     private mutating func useSlash(at index: Int, targetID: Int?) throws {
         guard slashLimitAllows(currentPlayerID) else { throw GameError.slashAlreadyUsed }
         guard let targetID, isLegalTarget(targetID, from: currentPlayerID) else { throw GameError.outOfRange }
-        discardPile.append(players[currentPlayerID].hand.remove(at: index))
+        let slash = players[currentPlayerID].hand.remove(at: index)
+        discardPile.append(slash)
         hasUsedSlash = true
         log.append("\(currentPlayer.name) 对 \(players[targetID].name) 使用杀。")
+        let ignoresArmor = players[currentPlayerID].equipment[.weapon]?.kind == .QinggangSword
+        if !ignoresArmor, players[targetID].equipment[.armor]?.kind == .blackShield, !slash.suit.isRed {
+            log.append("仁王盾阻挡了黑色杀；\(players[targetID].name) 不受此杀影响。")
+            phase = .action
+            return
+        }
         if players[targetID].isHuman {
             requiredResponse = .dodge
             if canRespond(for: targetID) { phase = .awaitingDodge(targetID: targetID, attackerID: currentPlayerID) }
@@ -292,7 +349,7 @@ public struct GameEngine {
 
     private mutating func usePeach(at index: Int, targetID: Int?) throws {
         let target = targetID ?? currentPlayerID
-        guard players.indices.contains(target), players[target].isAlive, players[target].hp < players[target].maxHP else { throw GameError.invalidTarget }
+        guard target == currentPlayerID, players[target].isAlive, players[target].hp < players[target].maxHP else { throw GameError.invalidTarget }
         discardPile.append(players[currentPlayerID].hand.remove(at: index))
         players[target].hp = min(players[target].maxHP, players[target].hp + 1)
         log.append("\(currentPlayer.name) 对 \(players[target].name) 使用桃，回复 1 点体力。")
@@ -416,13 +473,12 @@ public struct GameEngine {
             log.append("所有受伤角色各回复 1 点体力。")
         case .snatch, .dismantle:
             guard let targetID else { return }
-            if let stolen = takeRandomCard(from: targetID) {
-                if card.kind == .snatch {
-                    players[sourceID].hand.append(stolen)
-                    log.append("\(players[sourceID].name) 从 \(players[targetID].name) 处获得【\(stolen.title)】（顺手牵羊）。")
-                } else {
-                    discardPile.append(stolen)
-                    log.append("\(players[sourceID].name) 弃置了 \(players[targetID].name) 的【\(stolen.title)】（过河拆桥）。")
+            if hasMovableCard(targetID) {
+                if players[sourceID].isHuman {
+                    phase = .choosingTargetCard(sourceID: sourceID, targetID: targetID, kind: card.kind)
+                } else if let option = preferredAICardChoice(from: targetID) {
+                    guard let selected = removeTargetCard(option.id, from: targetID) else { return }
+                    moveChosenCard(selected, from: targetID, to: sourceID, using: card.kind)
                 }
             } else {
                 log.append("\(players[sourceID].name) 对 \(players[targetID].name) 使用【\(card.title)】，但目标没有可移动的牌。")
@@ -438,9 +494,15 @@ public struct GameEngine {
             resolveNextMassTarget()
         case .lightning, .indulgence: break
         case .collateral:
-            if let targetID, let weapon = players[targetID].equipment.removeValue(forKey: .weapon) {
-                discardPile.append(weapon)
-                log.append("\(players[sourceID].name) 对 \(players[targetID].name) 使用【借刀杀人】，本局简化结算弃置其武器【\(weapon.title)】。")
+            if let weaponOwnerID = targetID {
+                if players[sourceID].isHuman {
+                    phase = .choosingCollateralTarget(sourceID: sourceID, weaponOwnerID: weaponOwnerID)
+                } else if let victim = collateralCandidates(for: weaponOwnerID).first(where: {
+                    !sameTeam(players[$0].role, players[sourceID].role)
+                }) ?? collateralCandidates(for: weaponOwnerID).first {
+                    phase = .awaitingCollateralSlash(sourceID: sourceID, weaponOwnerID: weaponOwnerID, targetID: victim)
+                    try? respondToCollateral(withSlash: players[weaponOwnerID].hand.contains { $0.kind == .slash })
+                }
             }
         case .harvest:
             beginHarvest(from: sourceID)
@@ -477,18 +539,20 @@ public struct GameEngine {
         phase = winner == nil ? .action : .gameOver
     }
 
-    private mutating func dealDamage(to targetID: Int, from sourceID: Int, amount: Int, cause: String) {
+    private mutating func dealDamage(to targetID: Int, from sourceID: Int?, amount: Int, cause: String) {
         players[targetID].hp -= amount
-        if sourceID == targetID {
+        if sourceID == nil {
+            log.append("\(players[targetID].name) 因【\(cause)】受到 \(amount) 点无来源雷电伤害。")
+        } else if sourceID == targetID {
             log.append("\(players[targetID].name) 因【\(cause)】受到 \(amount) 点伤害。")
         } else {
-            log.append("\(players[sourceID].name) 使用【\(cause)】对 \(players[targetID].name) 造成 \(amount) 点伤害。")
+            log.append("\(players[sourceID!].name) 使用【\(cause)】对 \(players[targetID].name) 造成 \(amount) 点伤害。")
         }
         switch players[targetID].general {
         case .caoCao:
             if let card = discardPile.popLast() { players[targetID].hand.append(card); log.append("奸雄：曹操获得造成伤害的牌【\(card.title)】。") }
         case .simaYi:
-            if sourceID != targetID, !players[sourceID].hand.isEmpty {
+            if let sourceID, sourceID != targetID, !players[sourceID].hand.isEmpty {
                 let card = players[sourceID].hand.removeFirst(); players[targetID].hand.append(card)
                 log.append("反馈：司马懿获得\(players[sourceID].name) 一张手牌。")
             }
@@ -499,6 +563,50 @@ public struct GameEngine {
             dyingCause = cause
             beginDying(targetID)
         }
+    }
+
+    private mutating func resolveDelayedTricks(for playerID: Int) -> Bool {
+        let delayed = players[playerID].delayedTricks
+        players[playerID].delayedTricks.removeAll()
+        var skipsAction = false
+        for card in delayed {
+            guard let judgment = takeTopCards(1).first else {
+                discardPile.append(card)
+                log.append("\(players[playerID].name) 的【\(card.title)】没有判定牌，未产生效果。")
+                continue
+            }
+            discardPile.append(judgment)
+            if card.kind == .indulgence {
+                discardPile.append(card)
+                skipsAction = judgment.suit != .heart
+                let result = skipsAction ? "跳过出牌阶段" : "红桃，不跳过出牌阶段"
+                log.append("\(players[playerID].name) 乐不思蜀判定翻出\(judgment.judgmentDescription)：\(result)。")
+            } else if card.kind == .lightning {
+                if judgment.suit == .spade && (2...9).contains(judgment.rank) {
+                    discardPile.append(card)
+                    log.append("\(players[playerID].name) 闪电判定翻出\(judgment.judgmentDescription)：命中黑桃 2–9。")
+                    dealDamage(to: playerID, from: nil, amount: 3, cause: "闪电")
+                    if case .dying = phase { return skipsAction }
+                } else if let nextPlayer = nextLightningTarget(after: playerID) {
+                    players[nextPlayer].delayedTricks.append(card)
+                    log.append("\(players[playerID].name) 闪电判定翻出\(judgment.judgmentDescription)：未命中，闪电传给\(players[nextPlayer].name)。")
+                } else {
+                    players[playerID].delayedTricks.append(card)
+                    log.append("\(players[playerID].name) 闪电判定翻出\(judgment.judgmentDescription)：未命中，场上无其他合法目标，闪电留在其判定区。")
+                }
+            }
+        }
+        return skipsAction
+    }
+
+    private func nextLightningTarget(after playerID: Int) -> Int? {
+        for offset in 1..<players.count {
+            let candidate = (playerID + offset) % players.count
+            if players[candidate].isAlive && !players[candidate].delayedTricks.contains(where: { $0.kind == .lightning }) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     private mutating func judgeEightTrigrams(for targetID: Int, against attackerID: Int, attack: String) -> Bool {
@@ -515,10 +623,42 @@ public struct GameEngine {
         return success
     }
 
-    private mutating func takeRandomCard(from playerID: Int) -> Card? {
-        if !players[playerID].hand.isEmpty { return players[playerID].hand.removeFirst() }
-        if let slot = players[playerID].equipment.keys.first { return players[playerID].equipment.removeValue(forKey: slot) }
+    private func targetOptions(for playerID: Int) -> [TargetCardOption] {
+        guard players.indices.contains(playerID) else { return [] }
+        let target = players[playerID]
+        let hand = target.hand.map { TargetCardOption(card: $0, zone: .hand) }
+        let equipment = EquipmentSlot.allCases.compactMap { target.equipment[$0] }
+            .map { TargetCardOption(card: $0, zone: .equipment) }
+        let judgment = target.delayedTricks.map { TargetCardOption(card: $0, zone: .judgment) }
+        return hand + equipment + judgment
+    }
+
+    private func preferredAICardChoice(from playerID: Int) -> TargetCardOption? {
+        let options = targetOptions(for: playerID)
+        return options.first { $0.zone != .hand } ?? options.first
+    }
+
+    private mutating func removeTargetCard(_ cardID: Int, from playerID: Int) -> Card? {
+        if let index = players[playerID].hand.firstIndex(where: { $0.id == cardID }) {
+            return players[playerID].hand.remove(at: index)
+        }
+        if let slot = EquipmentSlot.allCases.first(where: { players[playerID].equipment[$0]?.id == cardID }) {
+            return players[playerID].equipment.removeValue(forKey: slot)
+        }
+        if let index = players[playerID].delayedTricks.firstIndex(where: { $0.id == cardID }) {
+            return players[playerID].delayedTricks.remove(at: index)
+        }
         return nil
+    }
+
+    private mutating func moveChosenCard(_ card: Card, from targetID: Int, to sourceID: Int, using kind: CardKind) {
+        if kind == .snatch {
+            players[sourceID].hand.append(card)
+            log.append("\(players[sourceID].name) 从 \(players[targetID].name) 处获得【\(card.title)】（顺手牵羊）。")
+        } else {
+            discardPile.append(card)
+            log.append("\(players[sourceID].name) 弃置了 \(players[targetID].name) 的【\(card.title)】（过河拆桥）。")
+        }
     }
 
     private func responseIndex(for playerID: Int) -> Int? {
@@ -563,10 +703,10 @@ public struct GameEngine {
             return true
         }
         if let trick = players[id].hand.first(where: {
-            [.amazingGrace, .godSalvation, .snatch, .dismantle, .duel, .indulgence, .lightning, .barbarianInvasion, .arrows, .harvest].contains($0.kind)
+            [.amazingGrace, .godSalvation, .snatch, .dismantle, .duel, .collateral, .indulgence, .lightning, .barbarianInvasion, .arrows, .harvest].contains($0.kind)
         }) {
-            let target = [.snatch, .dismantle, .duel, .indulgence].contains(trick.kind) ? aiTarget(for: id) : nil
-            let targetNeeded = [.snatch, .dismantle, .duel, .indulgence].contains(trick.kind)
+            let target = [.snatch, .dismantle, .duel, .collateral, .indulgence].contains(trick.kind) ? aiTarget(for: id, using: trick.kind) : nil
+            let targetNeeded = [.snatch, .dismantle, .duel, .collateral, .indulgence].contains(trick.kind)
             if !targetNeeded || target != nil {
                 try? play(cardID: trick.id, targetID: target)
                 return true
@@ -578,8 +718,10 @@ public struct GameEngine {
         return true
     }
 
-    private func aiTarget(for id: Int) -> Int? {
-        let candidates = players.filter { isLegalTarget($0.id, from: id) }
+    private func aiTarget(for id: Int, using kind: CardKind? = nil) -> Int? {
+        let candidates = players.filter { player in
+            kind.map { canTarget(player.id, with: $0, from: id) } ?? isLegalTarget(player.id, from: id)
+        }
         let enemies = candidates.filter { !sameTeam(players[id].role, $0.role) }
         return enemies.first(where: { $0.isHuman })?.id ?? enemies.first?.id
     }
@@ -619,7 +761,7 @@ public struct GameEngine {
         dyingPasses += 1
         let livingCount = players.filter(\.isAlive).count
         if dyingPasses >= livingCount {
-            eliminate(targetID, by: dyingSourceID ?? currentPlayerID)
+            eliminate(targetID, by: dyingSourceID ?? targetID)
             dyingSourceID = nil
             dyingCause = "伤害"
             phase = winner == nil ? .action : .gameOver

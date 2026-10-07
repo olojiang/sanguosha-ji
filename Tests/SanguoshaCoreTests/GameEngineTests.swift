@@ -70,9 +70,13 @@ final class GameEngineTests: XCTestCase {
         try game.drawForTurn()
         let trick = try XCTUnwrap(game.human.hand.first { $0.kind == .dismantle })
         let targetName = game.players[1].general.title
+        let peachID = try XCTUnwrap(game.players[1].hand.first { $0.kind == .peach }).id
 
         try game.play(cardID: trick.id, targetID: 1)
         try passTrickResponses(&game)
+        XCTAssertEqual(game.phase, .choosingTargetCard(sourceID: 0, targetID: 1, kind: .dismantle))
+        XCTAssertEqual(game.targetCardOptions.map(\.id), [peachID])
+        try game.chooseTargetCard(cardID: peachID)
 
         let visible = GameLogPresentation.visibleLines(from: game.log, players: game.players)
         let spoken = GameVoiceCue.spokenLines(from: game.log, players: game.players)
@@ -87,9 +91,12 @@ final class GameEngineTests: XCTestCase {
         try game.drawForTurn()
         let trick = try XCTUnwrap(game.human.hand.first { $0.kind == .snatch })
         let targetName = game.players[1].general.title
+        let crossbowID = try XCTUnwrap(game.players[1].hand.first { $0.kind == .crossbow }).id
 
         try game.play(cardID: trick.id, targetID: 1)
         try passTrickResponses(&game)
+        XCTAssertEqual(game.phase, .choosingTargetCard(sourceID: 0, targetID: 1, kind: .snatch))
+        try game.chooseTargetCard(cardID: crossbowID)
 
         let visible = GameLogPresentation.visibleLines(from: game.log, players: game.players)
         let spoken = GameVoiceCue.spokenLines(from: game.log, players: game.players)
@@ -97,6 +104,119 @@ final class GameEngineTests: XCTestCase {
         XCTAssertTrue(visible.contains("你 从 \(targetName) 处获得【诸葛连弩】（顺手牵羊）。"), "\(visible)")
         XCTAssertTrue(spoken.contains("我对\(targetName)使用锦囊【顺手牵羊】。"), "\(spoken)")
         XCTAssertTrue(spoken.contains("我从\(targetName)处获得【诸葛连弩】（顺手牵羊）。"), "\(spoken)")
+    }
+
+    func testDismantleCanChooseVisibleEquipmentInsteadOfTargetHand() throws {
+        var game = GameEngine.newGame(seed: 329, hands: [[.dismantle], [], [], []], startingEquipment: [[], [.crossbow], [], []])
+        try game.drawForTurn()
+        let dismantle = try XCTUnwrap(game.human.hand.first { $0.kind == .dismantle })
+        let target = try XCTUnwrap(game.players.first { $0.equipment[.weapon]?.kind == .crossbow })
+
+        try game.play(cardID: dismantle.id, targetID: target.id)
+        try passTrickResponses(&game)
+
+        let option = try XCTUnwrap(game.targetCardOptions.first { $0.card.kind == .crossbow })
+        XCTAssertEqual(option.zone, .equipment)
+        try game.chooseTargetCard(cardID: option.id)
+
+        XCTAssertNil(game.players[target.id].equipment[.weapon])
+        XCTAssertTrue(game.discardPile.contains { $0.id == option.id })
+        XCTAssertTrue(game.log.contains { $0.contains("【诸葛连弩】") && $0.contains("过河拆桥") })
+    }
+
+    func testDismantleCannotTargetAPlayerWithoutAnyMovableCards() throws {
+        let game = GameEngine.newGame(seed: 330, hands: [[.dismantle], [], [], []])
+
+        XCTAssertFalse(game.canTarget(1, with: .dismantle, from: 0))
+    }
+
+    func testPeachCannotHealAnotherPlayerDuringTheActionPhase() throws {
+        var game = GameEngine.newGame(seed: 331, hands: [[.peach], [], [], []], startingHP: [4, 2, 4, 4])
+        try game.drawForTurn()
+        let peach = try XCTUnwrap(game.human.hand.first { $0.kind == .peach })
+
+        XCTAssertThrowsError(try game.play(cardID: peach.id, targetID: 1))
+        XCTAssertEqual(game.players[1].hp, 2)
+        XCTAssertTrue(game.human.hand.contains { $0.id == peach.id })
+    }
+
+    func testCollateralUsesWeaponOwnersSlashInsteadOfDiscardingTheWeapon() throws {
+        var game = GameEngine.newGame(seed: 332, hands: [[.collateral], [.slash], [], []], startingEquipment: [[], [.crossbow], [], []])
+        try game.drawForTurn()
+        let collateral = try XCTUnwrap(game.human.hand.first { $0.kind == .collateral })
+        let weaponOwner = try XCTUnwrap(game.players.first { $0.equipment[.weapon]?.kind == .crossbow })
+        let targetHP = game.players[2].hp
+
+        try game.play(cardID: collateral.id, targetID: weaponOwner.id)
+
+        XCTAssertEqual(game.phase, .choosingCollateralTarget(sourceID: 0, weaponOwnerID: weaponOwner.id))
+        XCTAssertTrue(game.collateralTargetCandidates.contains(2))
+        try game.chooseCollateralTarget(2)
+
+        XCTAssertEqual(game.players[2].hp, targetHP - 1)
+        XCTAssertEqual(game.players[weaponOwner.id].equipment[.weapon]?.kind, .crossbow)
+        XCTAssertTrue(game.log.contains { $0.contains(weaponOwner.name) && $0.contains(game.players[2].name) && $0.contains("借刀杀人") }, "\(game.log)")
+    }
+
+    func testCollateralTransfersWeaponWhenOwnerCannotUseSlash() throws {
+        var game = GameEngine.newGame(seed: 333, hands: [[.collateral], [], [], []], startingEquipment: [[], [.crossbow], [], []])
+        try game.drawForTurn()
+        let collateral = try XCTUnwrap(game.human.hand.first { $0.kind == .collateral })
+        let weaponOwner = try XCTUnwrap(game.players.first { $0.equipment[.weapon]?.kind == .crossbow })
+        let weaponID = try XCTUnwrap(weaponOwner.equipment[.weapon]).id
+
+        try game.play(cardID: collateral.id, targetID: weaponOwner.id)
+        try game.chooseCollateralTarget(2)
+
+        XCTAssertNil(game.players[weaponOwner.id].equipment[.weapon])
+        XCTAssertTrue(game.human.hand.contains { $0.id == weaponID })
+        XCTAssertTrue(game.log.contains { $0.contains("交给") && $0.contains("借刀杀人") })
+    }
+
+    func testIndulgenceUsesJudgmentSuitToDecideWhetherActionIsSkipped() throws {
+        var heartGame = try gameWithDelayedTrick(.indulgence, judgment: { $0.suit == .heart })
+        try heartGame.drawForTurn()
+        XCTAssertEqual(heartGame.currentPlayerID, 0)
+        XCTAssertEqual(heartGame.phase, .action)
+        XCTAssertTrue(heartGame.log.contains { $0.contains("乐不思蜀判定") && $0.contains("红桃") && $0.contains("不跳过") })
+
+        var blackGame = try gameWithDelayedTrick(.indulgence, judgment: { $0.suit != .heart })
+        try blackGame.drawForTurn()
+        XCTAssertEqual(blackGame.currentPlayerID, 1)
+        XCTAssertEqual(blackGame.phase, .drawing)
+        XCTAssertTrue(blackGame.log.contains { $0.contains("乐不思蜀判定") && $0.contains("跳过出牌阶段") })
+    }
+
+    func testLightningDealsThreeDamageOnlyOnSpadeTwoThroughNineAndOtherwisePasses() throws {
+        var hitGame = try gameWithDelayedTrick(.lightning, judgment: { $0.suit == .spade && (2...9).contains($0.rank) })
+        try hitGame.drawForTurn()
+        XCTAssertEqual(hitGame.human.hp, 1)
+        XCTAssertTrue(hitGame.log.contains { $0.contains("闪电判定") && $0.contains("黑桃") })
+        XCTAssertTrue(hitGame.log.contains { $0.contains("3 点无来源雷电伤害") })
+        XCTAssertFalse(hitGame.players[1].delayedTricks.contains { $0.kind == .lightning })
+
+        var passGame = try gameWithDelayedTrick(.lightning, judgment: { $0.suit != .spade || !(2...9).contains($0.rank) })
+        try passGame.drawForTurn()
+        XCTAssertEqual(passGame.human.hp, 4)
+        XCTAssertTrue(passGame.players[1].delayedTricks.contains { $0.kind == .lightning })
+        XCTAssertTrue(passGame.log.contains { $0.contains("闪电传给") })
+    }
+
+    func testBlackShieldBlocksBlackSlashButAllowsRedSlash() throws {
+        var blackGame = try gameWithHandCard(.slash, suit: { !$0.isRed }, targetEquipment: .blackShield)
+        try blackGame.drawForTurn()
+        let blackSlash = try XCTUnwrap(blackGame.human.hand.first { $0.kind == .slash })
+        let blackTargetHP = blackGame.players[1].hp
+        try blackGame.play(cardID: blackSlash.id, targetID: 1)
+        XCTAssertEqual(blackGame.players[1].hp, blackTargetHP)
+        XCTAssertTrue(blackGame.log.contains { $0.contains("仁王盾") && $0.contains("黑色杀") })
+
+        var redGame = try gameWithHandCard(.slash, suit: \.isRed, targetEquipment: .blackShield)
+        try redGame.drawForTurn()
+        let redSlash = try XCTUnwrap(redGame.human.hand.first { $0.kind == .slash })
+        let redTargetHP = redGame.players[1].hp
+        try redGame.play(cardID: redSlash.id, targetID: 1)
+        XCTAssertEqual(redGame.players[1].hp, redTargetHP - 1)
     }
 
     func testNullificationOpensSeatOrderedResponseWindowAndCancelsTrick() throws {
@@ -127,6 +247,9 @@ final class GameEngineTests: XCTestCase {
         try game.respondToTrick(withNullification: true)
         try game.respondToTrick(withNullification: true)
 
+        XCTAssertEqual(game.phase, .choosingTargetCard(sourceID: 0, targetID: 3, kind: .dismantle))
+        let peach = try XCTUnwrap(game.targetCardOptions.first { $0.card.kind == .peach })
+        try game.chooseTargetCard(cardID: peach.id)
         XCTAssertFalse(game.players[3].hand.contains { $0.kind == .peach })
         XCTAssertTrue(game.log.contains { $0.contains("无懈可击") && $0.contains("反制") })
         XCTAssertTrue(game.log.contains { $0.contains(game.players[3].name) && $0.contains("过河拆桥") })
@@ -150,9 +273,12 @@ final class GameEngineTests: XCTestCase {
 
         try game.play(cardID: dismantle.id, targetID: 3)
 
-        XCTAssertEqual(game.phase, .action)
+        XCTAssertEqual(game.phase, .choosingTargetCard(sourceID: 0, targetID: 3, kind: .dismantle))
         XCTAssertNil(game.trickResponseSummary)
         XCTAssertFalse(game.log.contains { $0.contains("无懈可击响应窗口开启") })
+        XCTAssertTrue(game.players[3].hand.contains { $0.kind == .peach })
+        let peach = try XCTUnwrap(game.targetCardOptions.first { $0.card.kind == .peach })
+        try game.chooseTargetCard(cardID: peach.id)
         XCTAssertFalse(game.players[3].hand.contains { $0.kind == .peach })
     }
 
@@ -621,11 +747,13 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(game.players[1].delayedTricks.map(\.kind), [.indulgence])
 
         try game.endTurn()
+        let shouldSkip = game.drawPile.first?.suit != .heart
         XCTAssertTrue(game.advanceAI())
 
         XCTAssertTrue(game.players[1].delayedTricks.isEmpty)
-        XCTAssertTrue(game.log.contains { $0.contains("跳过出牌阶段") })
-        XCTAssertEqual(game.currentPlayerID, 2)
+        XCTAssertEqual(game.log.contains { $0.contains("乐不思蜀判定翻出") && $0.contains("：跳过出牌阶段。") }, shouldSkip)
+        XCTAssertEqual(game.currentPlayerID, shouldSkip ? 2 : 1)
+        XCTAssertEqual(game.phase, shouldSkip ? .drawing : .action)
     }
 
     func testDuelConsumesTheTargetSlashAndWaitsForChallengersResponse() throws {
@@ -645,6 +773,24 @@ final class GameEngineTests: XCTestCase {
 }
 
 private extension GameEngineTests {
+    func gameWithHandCard(_ kind: CardKind, suit matches: (Suit) -> Bool, targetEquipment: CardKind) throws -> GameEngine {
+        for seed in 1...100 {
+            let game = GameEngine.newGame(seed: UInt64(seed), hands: [[kind], [], [], []],
+                                          startingEquipment: [[], [targetEquipment], [], []])
+            if let card = game.human.hand.first, matches(card.suit) { return game }
+        }
+        throw GameError.invalidCard
+    }
+
+    func gameWithDelayedTrick(_ kind: CardKind, judgment matches: (Card) -> Bool) throws -> GameEngine {
+        for seed in 1...2_000 {
+            let game = GameEngine.newGame(seed: UInt64(seed), hands: [[], [], [], []],
+                                          startingHP: [4, 4, 4, 4], startingDelayedTricks: [[kind], [], [], []])
+            if let judgment = game.drawPile.first, matches(judgment) { return game }
+        }
+        throw GameError.invalidCard
+    }
+
     func passTrickResponses(_ game: inout GameEngine) throws {
         while case .respondingToTrick = game.phase {
             try game.respondToTrick(withNullification: false)

@@ -134,26 +134,26 @@ public enum CardKind: String, CaseIterable, Equatable, Sendable {
         case .dodge: "受到杀时打出，抵消这次杀。"
         case .peach: "出牌阶段回复自己 1 点体力；角色濒死时也可用于救援。"
         case .wine: "本回合下一张杀额外造成 1 点伤害。"
-        case .lightning: "放入自己的判定区；下回合开始时结算，本版本简化为 1 点伤害。"
-        case .indulgence: "指定一名角色放入其判定区；当前版本尚未翻判定牌，暂按跳过出牌阶段结算。"
+        case .lightning: "放入自己的判定区；回合开始翻牌，黑桃 2–9 命中并受到 3 点无来源雷电伤害，否则传给下家。"
+        case .indulgence: "放入一名其他角色的判定区；其回合开始判定，非红桃则跳过出牌阶段。"
         case .barbarianInvasion: "其他角色依次打出杀响应，否则受到 1 点伤害。"
         case .arrows: "其他角色依次打出闪响应，否则受到 1 点伤害。"
         case .harvest: "亮出等同存活角色数的牌；从使用者开始，按座次依次选择并获得一张。"
         case .godSalvation: "所有受伤角色各回复 1 点体力。"
         case .nullification: "响应锦囊：抵消当前锦囊；其他角色可再用无懈可击反制。全部连续放弃后，按奇偶决定锦囊是否生效。"
-        case .snatch: "获得距离 1 内一名角色的一张手牌或装备。"
-        case .dismantle: "弃置一名角色的一张手牌或装备。"
+        case .snatch: "获得距离 1 内一名角色区域里的一张牌：暗置手牌、装备或判定牌。"
+        case .dismantle: "弃置一名角色区域里的一张牌：暗置手牌、装备或判定牌。"
         case .duel: "与一名角色决斗；从目标开始轮流打出【杀】，先无法响应者受到 1 点伤害。"
-        case .collateral: "指定一名装备武器的角色；借刀结算目前仍简化。"
+        case .collateral: "指定一名装备武器且有合法杀目标的角色，再指定其攻击范围内的目标；其不出杀时将武器交给你。"
         case .amazingGrace: "你摸两张牌。"
         case .offensiveHorse: "进攻马：你计算与其他角色的距离 -1。"
         case .defensiveHorse: "防御马：其他角色计算与你的距离 +1。"
         case .eightTrigrams: "需要使用闪时发动：翻开牌堆顶一张牌。红色视为使用闪并抵消攻击；黑色判定失败，受到攻击伤害。判定牌进入弃牌堆。"
-        case .blackShield: "防具；当前规则未实现其颜色免疫效果。"
+        case .blackShield: "仁王盾：免疫黑色【杀】；青釭剑可无视此防具。"
         case .doubleSword: "雌雄双股剑：攻击范围 2。"
         case .iceSword: "武器，攻击范围 2；弃牌特效尚未实现。"
         case .greenDragonBlade: "武器，攻击范围 3。"
-        case .QinggangSword: "青釭剑：攻击范围 2；无视目标防具效果尚未实现。"
+        case .QinggangSword: "青釭剑：攻击范围 2；使用【杀】时无视目标防具。"
         case .serpentSpear: "武器，攻击范围 3。"
         case .kylinBow: "武器，攻击范围 5。"
         case .crossbow: "武器，攻击范围 1；允许连续使用杀。"
@@ -318,6 +318,34 @@ public struct Card: Identifiable, Equatable, Sendable {
     }
 }
 
+public enum CardSelectionZone: Equatable, Sendable {
+    case hand
+    case equipment
+    case judgment
+
+    public var title: String {
+        switch self {
+        case .hand: "暗置手牌"
+        case .equipment: "装备区"
+        case .judgment: "判定区"
+        }
+    }
+
+    public var isHidden: Bool { self == .hand }
+}
+
+public struct TargetCardOption: Identifiable, Equatable, Sendable {
+    public let card: Card
+    public let zone: CardSelectionZone
+
+    public var id: Int { card.id }
+
+    public init(card: Card, zone: CardSelectionZone) {
+        self.card = card
+        self.zone = zone
+    }
+}
+
 public struct Player: Equatable, Identifiable {
     public let id: Int
     public let name: String
@@ -338,6 +366,9 @@ public enum GamePhase: Equatable {
     case drawing
     case action
     case choosingHarvest(playerID: Int)
+    case choosingTargetCard(sourceID: Int, targetID: Int, kind: CardKind)
+    case choosingCollateralTarget(sourceID: Int, weaponOwnerID: Int)
+    case awaitingCollateralSlash(sourceID: Int, weaponOwnerID: Int, targetID: Int)
     case awaitingDodge(targetID: Int, attackerID: Int)
     case awaitingDuelSlash(responderID: Int, challengerID: Int)
     case respondingToTrick(responderID: Int)
