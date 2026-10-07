@@ -61,7 +61,7 @@ final class GameEngineTests: XCTestCase {
         let targetName = game.players[1].general.title
 
         try game.play(cardID: trick.id, targetID: 1)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        try passTrickResponses(&game)
 
         let visible = GameLogPresentation.visibleLines(from: game.log, players: game.players)
         let spoken = GameVoiceCue.spokenLines(from: game.log, players: game.players)
@@ -78,7 +78,7 @@ final class GameEngineTests: XCTestCase {
         let targetName = game.players[1].general.title
 
         try game.play(cardID: trick.id, targetID: 1)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        try passTrickResponses(&game)
 
         let visible = GameLogPresentation.visibleLines(from: game.log, players: game.players)
         let spoken = GameVoiceCue.spokenLines(from: game.log, players: game.players)
@@ -100,7 +100,6 @@ final class GameEngineTests: XCTestCase {
         XCTAssertTrue(game.trickResponseSummary?.contains(game.players[3].general.title) == true)
         XCTAssertTrue(game.players[3].hand.contains { $0.kind == .peach })
         try game.respondToTrick(withNullification: true)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
 
         XCTAssertTrue(game.players[3].hand.contains { $0.kind == .peach }, "Canceled dismantle must not remove the target card")
         XCTAssertTrue(game.log.contains { $0.contains("无懈可击") && $0.contains("过河拆桥") })
@@ -116,7 +115,6 @@ final class GameEngineTests: XCTestCase {
         try game.play(cardID: dismantle.id, targetID: 3)
         try game.respondToTrick(withNullification: true)
         try game.respondToTrick(withNullification: true)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
 
         XCTAssertFalse(game.players[3].hand.contains { $0.kind == .peach })
         XCTAssertTrue(game.log.contains { $0.contains("无懈可击") && $0.contains("反制") })
@@ -133,13 +131,27 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(game.phase, .action)
     }
 
+    func testNoOneWithNullificationGetsAWindowOrAnnouncement() throws {
+        var game = GameEngine.newGame(seed: 786, hands: [[.dismantle], [], [], [.peach]])
+        try game.drawForTurn()
+        XCTAssertFalse(game.players.flatMap(\.hand).contains { $0.kind == .nullification })
+        let dismantle = try XCTUnwrap(game.human.hand.first { $0.kind == .dismantle })
+
+        try game.play(cardID: dismantle.id, targetID: 3)
+
+        XCTAssertEqual(game.phase, .action)
+        XCTAssertNil(game.trickResponseSummary)
+        XCTAssertFalse(game.log.contains { $0.contains("无懈可击响应窗口开启") })
+        XCTAssertFalse(game.players[3].hand.contains { $0.kind == .peach })
+    }
+
     func testDuelAlternatesSlashResponsesUntilAPlayerFails() throws {
         var game = GameEngine.newGame(seed: 784, hands: [[.duel], [.slash], [], []], startingHP: [4, 4, 4, 4])
         try game.drawForTurn()
         let duel = try XCTUnwrap(game.human.hand.first { $0.kind == .duel })
 
         try game.play(cardID: duel.id, targetID: 1)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        try passTrickResponses(&game)
 
         XCTAssertEqual(game.phase, .awaitingDuelSlash(responderID: 1, challengerID: 0))
         XCTAssertTrue(game.advanceAI())
@@ -215,7 +227,7 @@ final class GameEngineTests: XCTestCase {
         let harvest = try XCTUnwrap(game.human.hand.first { $0.kind == .harvest })
 
         try game.play(cardID: harvest.id)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        try passTrickResponses(&game)
 
         XCTAssertEqual(game.phase, .choosingHarvest(playerID: 0))
         XCTAssertEqual(game.harvestChoices.count, 4)
@@ -228,7 +240,7 @@ final class GameEngineTests: XCTestCase {
         try game.drawForTurn()
         let harvest = try XCTUnwrap(game.human.hand.first { $0.kind == .harvest })
         try game.play(cardID: harvest.id)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        try passTrickResponses(&game)
         let firstChoice = try XCTUnwrap(game.harvestChoices.first)
 
         try game.chooseHarvest(cardID: firstChoice.id, by: 0)
@@ -248,7 +260,7 @@ final class GameEngineTests: XCTestCase {
         try game.drawForTurn()
         let harvest = try XCTUnwrap(game.human.hand.first { $0.kind == .harvest })
         try game.play(cardID: harvest.id)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        try passTrickResponses(&game)
         let choices = game.harvestChoices
 
         XCTAssertThrowsError(try game.chooseHarvest(cardID: -1, by: 0))
@@ -533,7 +545,7 @@ final class GameEngineTests: XCTestCase {
         let before = game.human.hand.count
         let trick = try XCTUnwrap(game.human.hand.first { $0.kind == .amazingGrace })
         try game.play(cardID: trick.id)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        try passTrickResponses(&game)
         XCTAssertEqual(game.human.hand.count, before + 1)
         XCTAssertTrue(game.log.contains { $0.contains("无中生有") })
     }
@@ -543,7 +555,7 @@ final class GameEngineTests: XCTestCase {
         try barbarian.drawForTurn()
         let invasion = try XCTUnwrap(barbarian.human.hand.first { $0.kind == .barbarianInvasion })
         try barbarian.play(cardID: invasion.id)
-        for _ in 0..<4 { try barbarian.respondToTrick(withNullification: false) }
+        try passTrickResponses(&barbarian)
         XCTAssertFalse(barbarian.players[1].hand.contains { $0.kind == .slash })
         XCTAssertTrue(barbarian.log.contains { $0.contains("响应【南蛮入侵】") })
 
@@ -551,7 +563,7 @@ final class GameEngineTests: XCTestCase {
         try arrows.drawForTurn()
         let volley = try XCTUnwrap(arrows.human.hand.first { $0.kind == .arrows })
         try arrows.play(cardID: volley.id)
-        for _ in 0..<4 { try arrows.respondToTrick(withNullification: false) }
+        try passTrickResponses(&arrows)
         XCTAssertFalse(arrows.players[1].hand.contains { $0.kind == .dodge })
         XCTAssertTrue(arrows.log.contains { $0.contains("响应【万箭齐发】") })
     }
@@ -578,7 +590,7 @@ final class GameEngineTests: XCTestCase {
         try game.drawForTurn()
         let card = try XCTUnwrap(game.human.hand.first { $0.kind == .indulgence })
         try game.play(cardID: card.id, targetID: 1)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        try passTrickResponses(&game)
         XCTAssertEqual(game.players[1].delayedTricks.map(\.kind), [.indulgence])
 
         try game.endTurn()
@@ -594,7 +606,7 @@ final class GameEngineTests: XCTestCase {
         try game.drawForTurn()
         let duel = try XCTUnwrap(game.human.hand.first { $0.kind == .duel })
         try game.play(cardID: duel.id, targetID: 1)
-        for _ in 0..<4 { try game.respondToTrick(withNullification: false) }
+        try passTrickResponses(&game)
         XCTAssertTrue(game.players[1].hand.contains { $0.kind == .slash })
         XCTAssertTrue(game.advanceAI())
 
@@ -602,5 +614,13 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(game.human.hp, game.human.maxHP)
         XCTAssertEqual(game.phase, .awaitingDuelSlash(responderID: 0, challengerID: 1))
         XCTAssertTrue(game.log.contains { $0.contains("决斗") })
+    }
+}
+
+private extension GameEngineTests {
+    func passTrickResponses(_ game: inout GameEngine) throws {
+        while case .respondingToTrick = game.phase {
+            try game.respondToTrick(withNullification: false)
+        }
     }
 }

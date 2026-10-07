@@ -5,7 +5,7 @@ private struct PendingTrick {
     let sourceID: Int
     let targetID: Int?
     var negationCount = 0
-    var passes = 0
+    var passedResponders: Set<Int> = []
 }
 
 public struct GameEngine {
@@ -321,12 +321,17 @@ public struct GameEngine {
             guard let targetID, canTarget(targetID, with: card.kind, from: sourceID) else { throw GameError.outOfRange }
         }
         players[sourceID].hand.remove(at: cardIndex)
-        pendingTrick = PendingTrick(card: card, sourceID: sourceID, targetID: targetID)
-        phase = .respondingToTrick(responderID: nextLivingPlayer(after: sourceID))
+        let trick = PendingTrick(card: card, sourceID: sourceID, targetID: targetID)
         log.append(needsTarget
             ? "\(players[sourceID].name) 对 \(players[targetID!].name) 使用锦囊【\(card.title)】。"
             : "\(players[sourceID].name) 使用锦囊【\(card.title)】。")
-        log.append("无懈可击响应窗口开启：其他角色可以反制【\(card.title)】。")
+        if let responderID = nextTrickResponder(after: sourceID, for: trick) {
+            pendingTrick = trick
+            phase = .respondingToTrick(responderID: responderID)
+            log.append("无懈可击响应窗口开启：有无懈可击的角色可以反制【\(card.title)】。")
+        } else {
+            resolveTrick(card, sourceID: sourceID, targetID: targetID)
+        }
     }
 
     public mutating func respondToTrick(withNullification: Bool) throws {
@@ -336,27 +341,39 @@ public struct GameEngine {
             let card = players[responderID].hand.remove(at: index)
             discardPile.append(card)
             trick.negationCount += 1
-            trick.passes = 0
+            trick.passedResponders.removeAll()
             let targetDescription = trick.targetID.map { " 对 \(players[$0].name)" } ?? ""
             log.append("\(players[responderID].name) 使用无懈可击，反制了\(players[trick.sourceID].name)\(targetDescription)使用的【\(trick.card.title)】。")
         } else {
-            trick.passes += 1
+            trick.passedResponders.insert(responderID)
             log.append("\(players[responderID].name) 放弃使用无懈可击响应【\(trick.card.title)】。")
         }
         pendingTrick = trick
-        if trick.passes >= players.filter(\.isAlive).count {
-            pendingTrick = nil
-            phase = .action
-            if trick.negationCount.isMultiple(of: 2) {
-                resolveTrick(trick.card, sourceID: trick.sourceID, targetID: trick.targetID)
-            } else {
-                discardPile.append(trick.card)
-                log.append("【\(trick.card.title)】被无懈可击抵消，不结算效果。")
-                phase = .action
-            }
+        if let nextResponder = nextTrickResponder(after: responderID, for: trick) {
+            phase = .respondingToTrick(responderID: nextResponder)
         } else {
-            phase = .respondingToTrick(responderID: nextLivingPlayer(after: responderID))
+            pendingTrick = nil
+            finishPendingTrick(trick)
         }
+    }
+
+    private func nextTrickResponder(after playerID: Int, for trick: PendingTrick) -> Int? {
+        for offset in 1...players.count {
+            let id = (playerID + offset) % players.count
+            if players[id].isAlive, !trick.passedResponders.contains(id),
+               players[id].hand.contains(where: { $0.kind == .nullification }) { return id }
+        }
+        return nil
+    }
+
+    private mutating func finishPendingTrick(_ trick: PendingTrick) {
+        guard trick.negationCount.isMultiple(of: 2) else {
+            discardPile.append(trick.card)
+            log.append("【\(trick.card.title)】被无懈可击抵消，不结算效果。")
+            phase = .action
+            return
+        }
+        resolveTrick(trick.card, sourceID: trick.sourceID, targetID: trick.targetID)
     }
 
     public mutating func respondToDuel(withSlash: Bool) throws {
