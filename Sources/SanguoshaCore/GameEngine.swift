@@ -8,6 +8,12 @@ private struct PendingTrick {
     var passedResponders: Set<Int> = []
 }
 
+private struct PendingSlash {
+    let sourceID: Int
+    let targetID: Int
+    let damage: Int
+}
+
 public struct GameEngine {
     public private(set) var players: [Player]
     public private(set) var allCards: [Card]
@@ -34,6 +40,7 @@ public struct GameEngine {
     private var pendingHarvestTrick: Card?
     private var pendingHarvestSourceID: Int?
     private var pendingTrick: PendingTrick?
+    private var pendingSlash: PendingSlash?
 
     public static func newGame(seed: UInt64 = UInt64.random(in: 1...UInt64.max), hands: [[CardKind]]? = nil, startingHP: [Int]? = nil, startingEquipment: [[CardKind]]? = nil, startingDelayedTricks: [[CardKind]]? = nil, humanGeneral: General? = .caoCao, humanRole: Role? = .lord, generalPool: [General] = [.caoCao, .simaYi, .zhangFei, .zhaoYun], playerCount: Int = 4) -> GameEngine {
         GameEngine(seed: seed, hands: hands, startingHP: startingHP, startingEquipment: startingEquipment, startingDelayedTricks: startingDelayedTricks, humanGeneral: humanGeneral, humanRole: humanRole, generalPool: generalPool, playerCount: playerCount)
@@ -116,8 +123,79 @@ public struct GameEngine {
     }
 
     public var targetCardOptions: [TargetCardOption] {
-        guard case let .choosingTargetCard(_, targetID, _) = phase else { return [] }
-        return targetOptions(for: targetID)
+        switch phase {
+        case let .choosingTargetCard(_, targetID, _): targetOptions(for: targetID)
+        case let .choosingIceSwordCard(_, targetID, _): handAndEquipmentOptions(for: targetID)
+        case let .choosingKylinBowHorse(_, targetID): horseOptions(for: targetID)
+        default: []
+        }
+    }
+
+    public var axeCostOptions: [TargetCardOption] {
+        guard case let .choosingAxeCosts(sourceID, _, _) = phase else { return [] }
+        return handAndEquipmentOptions(for: sourceID).filter { $0.card.kind != .axe }
+    }
+
+    public var canBeginSpearSlash: Bool {
+        phase == .action && currentPlayer.equipment[.weapon]?.kind == .serpentSpear
+            && currentPlayer.hand.count >= 2 && slashLimitAllows(currentPlayerID)
+    }
+
+    public mutating func toggleAxeCost(cardID: Int) throws {
+        guard case let .choosingAxeCosts(sourceID, targetID, selectedIDs) = phase,
+              axeCostOptions.contains(where: { $0.id == cardID }) else { throw GameError.invalidCard }
+        var selection = selectedIDs
+        if selection.contains(cardID) { selection.removeAll { $0 == cardID } }
+        else if selection.count < 2 { selection.append(cardID) }
+        phase = .choosingAxeCosts(sourceID: sourceID, targetID: targetID, selectedIDs: selection)
+    }
+
+    public mutating func confirmAxeCosts() throws {
+        guard case let .choosingAxeCosts(_, _, selectedIDs) = phase else { throw GameError.wrongPhase }
+        try commitAxeCosts(cardIDs: selectedIDs)
+    }
+
+    public mutating func beginSpearSlash() throws {
+        guard phase == .action, currentPlayer.equipment[.weapon]?.kind == .serpentSpear,
+              slashLimitAllows(currentPlayerID), currentPlayer.hand.count >= 2 else { throw GameError.invalidCard }
+        phase = .choosingSpearCosts(selectedIDs: [])
+    }
+
+    public mutating func toggleSpearCost(cardID: Int) throws {
+        guard case let .choosingSpearCosts(selectedIDs) = phase,
+              currentPlayer.hand.contains(where: { $0.id == cardID }) else { throw GameError.invalidCard }
+        var selection = selectedIDs
+        if selection.contains(cardID) { selection.removeAll { $0 == cardID } }
+        else if selection.count < 2 { selection.append(cardID) }
+        phase = .choosingSpearCosts(selectedIDs: selection)
+    }
+
+    public mutating func confirmSpearCosts() throws {
+        guard case let .choosingSpearCosts(selectedIDs) = phase, selectedIDs.count == 2 else { throw GameError.invalidCard }
+        phase = .choosingSpearTarget(selectedIDs: selectedIDs)
+    }
+
+    public mutating func chooseSpearTarget(_ targetID: Int) throws {
+        guard case let .choosingSpearTarget(selectedIDs) = phase,
+              isLegalTarget(targetID, from: currentPlayerID),
+              selectedIDs.count == 2,
+              selectedIDs.allSatisfy({ id in currentPlayer.hand.contains { $0.id == id } }) else { throw GameError.invalidTarget }
+        var costs: [Card] = []
+        for id in selectedIDs {
+            if let index = players[currentPlayerID].hand.firstIndex(where: { $0.id == id }) {
+                costs.append(players[currentPlayerID].hand.remove(at: index))
+            }
+        }
+        guard costs.count == 2 else { throw GameError.invalidCard }
+        discardPile.append(contentsOf: costs)
+        let names = costs.map { "【\($0.title)】" }.joined(separator: "和")
+        let announcement = "\(currentPlayer.name) 弃置\(names)，将其当作【杀】对 \(players[targetID].name) 使用。"
+        startSlash(targetID: targetID, isRedSlash: true, announcement: announcement)
+    }
+
+    public mutating func cancelSpearSlash() {
+        if case .choosingSpearCosts = phase { phase = .action }
+        else if case .choosingSpearTarget = phase { phase = .action }
     }
 
     public static func eightTrigramsDodges(with suit: Suit) -> Bool { suit.isRed }
@@ -172,6 +250,10 @@ public struct GameEngine {
         } else if withDodge, requiredResponse == .dodge, players[targetID].equipment[.armor]?.kind == .eightTrigrams {
             dodged = judgeEightTrigrams(for: targetID, against: attackerID, attack: "杀")
         }
+        if pendingSlash != nil {
+            try resolvePendingSlash(wasDodged: dodged)
+            return
+        }
         if !dodged {
             let damage = attackerID == currentPlayerID ? nextSlashDamage : 1
             dealDamage(to: targetID, from: attackerID, amount: damage, cause: "杀")
@@ -181,6 +263,76 @@ public struct GameEngine {
         else if case .dying = phase { return }
         else if !pendingMassTargets.isEmpty { resolveNextMassTarget() }
         else { phase = .action }
+    }
+
+    public mutating func respondToDoubleSword(discardCardID: Int?) throws {
+        guard case let .awaitingDoubleSwordChoice(sourceID, targetID) = phase else { throw GameError.wrongPhase }
+        if let discardCardID {
+            guard let index = players[targetID].hand.firstIndex(where: { $0.id == discardCardID }) else { throw GameError.invalidCard }
+            let card = players[targetID].hand.remove(at: index)
+            discardPile.append(card)
+            log.append("雌雄双股剑：\(players[targetID].name) 弃置手牌【\(card.title)】。")
+        } else {
+            draw(1, for: sourceID)
+            log.append("雌雄双股剑：\(players[targetID].name) 放弃弃牌，\(players[sourceID].name) 摸一张牌。")
+        }
+        beginSlashResponse()
+    }
+
+    public mutating func chooseIceSword(use: Bool) throws {
+        guard case let .awaitingIceSwordChoice(sourceID, targetID) = phase else { throw GameError.wrongPhase }
+        guard use else { resolveSlashDamage(); return }
+        let count = min(2, handAndEquipmentOptions(for: targetID).count)
+        guard count > 0 else { resolveSlashDamage(); return }
+        log.append("寒冰剑：\(players[sourceID].name) 防止对 \(players[targetID].name) 造成的伤害，改为弃置其 \(count) 张牌。")
+        phase = .choosingIceSwordCard(sourceID: sourceID, targetID: targetID, remaining: count)
+    }
+
+    public mutating func chooseIceSwordCard(cardID: Int) throws {
+        guard case let .choosingIceSwordCard(sourceID, targetID, remaining) = phase,
+              targetCardOptions.contains(where: { $0.id == cardID }),
+              let card = removeTargetCard(cardID, from: targetID) else { throw GameError.invalidCard }
+        discardPile.append(card)
+        log.append("寒冰剑：\(players[sourceID].name) 弃置了 \(players[targetID].name) 的【\(card.title)】。")
+        let left = min(remaining - 1, handAndEquipmentOptions(for: targetID).count)
+        if left > 0 { phase = .choosingIceSwordCard(sourceID: sourceID, targetID: targetID, remaining: left) }
+        else { finishPreventedSlash() }
+    }
+
+    public mutating func chooseAxe(use: Bool) throws {
+        guard case let .awaitingAxeChoice(sourceID, targetID) = phase else { throw GameError.wrongPhase }
+        guard use else { finishDodgedSlash(); return }
+        phase = .choosingAxeCosts(sourceID: sourceID, targetID: targetID, selectedIDs: [])
+    }
+
+    public mutating func commitAxeCosts(cardIDs: [Int]) throws {
+        guard case let .choosingAxeCosts(sourceID, targetID, _) = phase,
+              cardIDs.count == 2, Set(cardIDs).count == 2 else {
+            throw GameError.invalidCard
+        }
+        let options = handAndEquipmentOptions(for: sourceID).filter { $0.card.kind != .axe }
+        guard cardIDs.allSatisfy({ id in options.contains { $0.id == id } }) else { throw GameError.invalidCard }
+        let cards = cardIDs.compactMap { removeTargetCard($0, from: sourceID) }
+        guard cards.count == 2 else { throw GameError.invalidCard }
+        discardPile.append(contentsOf: cards)
+        let costNames = cards.map { "【\($0.title)】" }.joined(separator: "和")
+        log.append("贯石斧：\(players[sourceID].name) 弃置\(costNames)，令对 \(players[targetID].name) 使用的杀强制命中。")
+        resolveSlashDamage()
+    }
+
+    public mutating func chooseKylinBow(use: Bool) throws {
+        guard case let .awaitingKylinBowChoice(sourceID, targetID) = phase else { throw GameError.wrongPhase }
+        guard use else { resolveSlashDamage(); return }
+        phase = .choosingKylinBowHorse(sourceID: sourceID, targetID: targetID)
+    }
+
+    public mutating func chooseKylinBowHorse(cardID: Int) throws {
+        guard case let .choosingKylinBowHorse(sourceID, targetID) = phase,
+              horseOptions(for: targetID).contains(where: { $0.id == cardID }),
+              let horse = removeTargetCard(cardID, from: targetID) else { throw GameError.invalidCard }
+        discardPile.append(horse)
+        log.append("麒麟弓：\(players[sourceID].name) 弃置了 \(players[targetID].name) 的【\(horse.title)】，杀仍造成伤害。")
+        resolveSlashDamage()
     }
 
     public mutating func respondToDying(withPeach: Bool) throws {
@@ -240,9 +392,8 @@ public struct GameEngine {
            canTarget(targetID, with: .slash, from: weaponOwnerID) {
             discardPile.append(players[weaponOwnerID].hand.remove(at: slashIndex))
             log.append("\(players[weaponOwnerID].name) 对 \(players[targetID].name) 使用杀（借刀杀人）。")
-            requiredResponse = .dodge
-            phase = .awaitingDodge(targetID: targetID, attackerID: weaponOwnerID)
-            if !players[targetID].isHuman { try respondToSlash(withDodge: canRespond(for: targetID)) }
+            pendingSlash = PendingSlash(sourceID: weaponOwnerID, targetID: targetID, damage: 1)
+            beginSlashResponse()
         } else if let weapon = players[weaponOwnerID].equipment.removeValue(forKey: .weapon) {
             players[sourceID].hand.append(weapon)
             log.append("\(players[weaponOwnerID].name) 未能对 \(players[targetID].name) 使用杀，将【\(weapon.title)】交给\(players[sourceID].name)（借刀杀人）。")
@@ -293,6 +444,11 @@ public struct GameEngine {
             try? chooseHarvest(cardID: card.id, by: playerID)
             return true
         }
+        if case let .choosingIceSwordCard(sourceID, _, _) = phase {
+            guard !players[sourceID].isHuman, let option = targetCardOptions.first else { return false }
+            try? chooseIceSwordCard(cardID: option.id)
+            return true
+        }
         if case let .dying(targetID, responderID) = phase {
             if players[responderID].isHuman { return false }
             let canSave = players[responderID].hand.contains(where: { $0.kind == .peach })
@@ -324,23 +480,105 @@ public struct GameEngine {
         guard let targetID, isLegalTarget(targetID, from: currentPlayerID) else { throw GameError.outOfRange }
         let slash = players[currentPlayerID].hand.remove(at: index)
         discardPile.append(slash)
+        startSlash(targetID: targetID, isRedSlash: slash.suit.isRed)
+    }
+
+    private mutating func startSlash(targetID: Int, isRedSlash: Bool, announcement: String? = nil) {
         hasUsedSlash = true
-        log.append("\(currentPlayer.name) 对 \(players[targetID].name) 使用杀。")
+        log.append(announcement ?? "\(currentPlayer.name) 对 \(players[targetID].name) 使用杀。")
         let ignoresArmor = players[currentPlayerID].equipment[.weapon]?.kind == .QinggangSword
-        if !ignoresArmor, players[targetID].equipment[.armor]?.kind == .blackShield, !slash.suit.isRed {
+        if !ignoresArmor, players[targetID].equipment[.armor]?.kind == .blackShield, !isRedSlash {
             log.append("仁王盾阻挡了黑色杀；\(players[targetID].name) 不受此杀影响。")
             phase = .action
             return
         }
-        if players[targetID].isHuman {
-            requiredResponse = .dodge
-            if canRespond(for: targetID) { phase = .awaitingDodge(targetID: targetID, attackerID: currentPlayerID) }
-            else { phase = .awaitingDodge(targetID: targetID, attackerID: currentPlayerID); try respondToSlash(withDodge: false) }
-        } else {
-            requiredResponse = .dodge
-            phase = .awaitingDodge(targetID: targetID, attackerID: currentPlayerID)
-            try respondToSlash(withDodge: canRespond(for: targetID))
+        pendingSlash = PendingSlash(sourceID: currentPlayerID, targetID: targetID, damage: nextSlashDamage)
+        if players[currentPlayerID].equipment[.weapon]?.kind == .doubleSword,
+           players[currentPlayerID].general.isFemale != players[targetID].general.isFemale {
+            phase = .awaitingDoubleSwordChoice(sourceID: currentPlayerID, targetID: targetID)
+            if players[targetID].hand.isEmpty {
+                try? respondToDoubleSword(discardCardID: nil)
+            } else if !players[targetID].isHuman {
+                let card = sameTeam(players[currentPlayerID].role, players[targetID].role)
+                    ? nil : players[targetID].hand.first?.id
+                try? respondToDoubleSword(discardCardID: card)
+            }
+            return
         }
+        beginSlashResponse()
+    }
+
+    private mutating func beginSlashResponse() {
+        guard let slash = pendingSlash else { return }
+        requiredResponse = .dodge
+        phase = .awaitingDodge(targetID: slash.targetID, attackerID: slash.sourceID)
+        if !players[slash.targetID].isHuman {
+            try? respondToSlash(withDodge: canRespond(for: slash.targetID))
+        } else if !canRespond(for: slash.targetID) {
+            try? respondToSlash(withDodge: false)
+        }
+    }
+
+    private mutating func resolvePendingSlash(wasDodged: Bool) throws {
+        guard let slash = pendingSlash else { return }
+        let weapon = players[slash.sourceID].equipment[.weapon]?.kind
+        if wasDodged, weapon == .axe, axeCards(for: slash.sourceID).count >= 2 {
+            phase = .awaitingAxeChoice(sourceID: slash.sourceID, targetID: slash.targetID)
+            if !players[slash.sourceID].isHuman {
+                try chooseAxe(use: true)
+                if case .choosingAxeCosts = phase {
+                    try commitAxeCosts(cardIDs: Array(axeCards(for: slash.sourceID).prefix(2)).map(\.id))
+                }
+            }
+            return
+        }
+        if !wasDodged { resolveUnavoidedSlash() }
+        else { finishDodgedSlash() }
+    }
+
+    private mutating func resolveUnavoidedSlash() {
+        guard let slash = pendingSlash else { return }
+        switch players[slash.sourceID].equipment[.weapon]?.kind {
+        case .iceSword where !handAndEquipmentOptions(for: slash.targetID).isEmpty:
+            phase = .awaitingIceSwordChoice(sourceID: slash.sourceID, targetID: slash.targetID)
+            if !players[slash.sourceID].isHuman { try? chooseIceSword(use: true) }
+        case .kylinBow where !horseOptions(for: slash.targetID).isEmpty:
+            phase = .awaitingKylinBowChoice(sourceID: slash.sourceID, targetID: slash.targetID)
+            if !players[slash.sourceID].isHuman {
+                try? chooseKylinBow(use: true)
+                if case .choosingKylinBowHorse = phase, let horse = targetCardOptions.first {
+                    try? chooseKylinBowHorse(cardID: horse.id)
+                }
+            }
+        default: resolveSlashDamage()
+        }
+    }
+
+    private mutating func resolveSlashDamage() {
+        guard let slash = pendingSlash else { return }
+        pendingSlash = nil
+        dealDamage(to: slash.targetID, from: slash.sourceID, amount: slash.damage, cause: "杀")
+        finishSlashTurn(attackerID: slash.sourceID)
+    }
+
+    private mutating func finishPreventedSlash() {
+        guard let slash = pendingSlash else { return }
+        pendingSlash = nil
+        finishSlashTurn(attackerID: slash.sourceID)
+    }
+
+    private mutating func finishDodgedSlash() {
+        guard let slash = pendingSlash else { return }
+        pendingSlash = nil
+        finishSlashTurn(attackerID: slash.sourceID)
+    }
+
+    private mutating func finishSlashTurn(attackerID: Int) {
+        if attackerID == currentPlayerID { nextSlashDamage = 1 }
+        if winner != nil { phase = .gameOver }
+        else if case .dying = phase { return }
+        else if !pendingMassTargets.isEmpty { resolveNextMassTarget() }
+        else { phase = .action }
     }
 
     private mutating func usePeach(at index: Int, targetID: Int?) throws {
@@ -629,6 +867,20 @@ public struct GameEngine {
         return hand + equipment + judgment
     }
 
+    private func handAndEquipmentOptions(for playerID: Int) -> [TargetCardOption] {
+        targetOptions(for: playerID).filter { $0.zone != .judgment }
+    }
+
+    private func horseOptions(for playerID: Int) -> [TargetCardOption] {
+        EquipmentSlot.allCases.filter { $0 == .offensiveHorse || $0 == .defensiveHorse }
+            .compactMap { players[playerID].equipment[$0] }
+            .map { TargetCardOption(card: $0, zone: .equipment) }
+    }
+
+    private func axeCards(for playerID: Int) -> [TargetCardOption] {
+        handAndEquipmentOptions(for: playerID).filter { $0.card.kind != .axe }
+    }
+
     private func preferredAICardChoice(from playerID: Int) -> TargetCardOption? {
         let options = targetOptions(for: playerID)
         return options.first { $0.zone != .hand } ?? options.first
@@ -707,6 +959,17 @@ public struct GameEngine {
                 try? play(cardID: trick.id, targetID: target)
                 return true
             }
+        }
+        if players[id].equipment[.weapon]?.kind == .serpentSpear,
+           !players[id].hand.contains(where: { $0.kind == .slash }),
+           slashLimitAllows(id), players[id].hand.count >= 2, let target = aiTarget(for: id) {
+            let costs = players[id].hand.sorted { harvestValue($0, for: id) < harvestValue($1, for: id) }.prefix(2)
+            let discarded = Array(costs)
+            players[id].hand.removeAll { card in discarded.contains { $0.id == card.id } }
+            discardPile.append(contentsOf: discarded)
+            let names = discarded.map { "【\($0.title)】" }.joined(separator: "和")
+            startSlash(targetID: target, isRedSlash: true, announcement: "\(players[id].name) 弃置\(names)，将其当作【杀】对 \(players[target].name) 使用。")
+            return true
         }
         guard let slash = players[id].hand.first(where: { $0.kind == .slash }), slashLimitAllows(id),
               let target = aiTarget(for: id) else { return false }

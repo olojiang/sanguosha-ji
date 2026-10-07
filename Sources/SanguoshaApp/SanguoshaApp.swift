@@ -159,11 +159,13 @@ private struct ContentView: View {
         let isTurn = game.currentPlayerID == id && game.winner == nil
         let collateralOwnerID = choosingCollateralWeaponOwnerID
         let isCollateralVictim = collateralOwnerID.map { game.canTarget(id, with: .slash, from: $0) } ?? false
-        let canTarget = isCollateralVictim || (selectedTargetCard.map { game.phase == .action && game.canTarget(id, with: $0.kind, from: 0) } ?? false)
+        let isSpearTarget: Bool = if case .choosingSpearTarget = game.phase { game.canTarget(id, with: .slash, from: 0) } else { false }
+        let canTarget = isCollateralVictim || isSpearTarget || (selectedTargetCard.map { game.phase == .action && game.canTarget(id, with: $0.kind, from: 0) } ?? false)
         let isRecentAction = game.log.suffix(3).contains { $0.contains(player.name) }
         let isDamaged = damagedPlayers.contains(id)
         return Button {
             if isCollateralVictim { chooseCollateralTarget(id) }
+            else if isSpearTarget { useSpearSlash(on: id) }
             else if canTarget { playSelected(on: id) }
         } label: {
             HStack(spacing: 12) {
@@ -208,7 +210,7 @@ private struct ContentView: View {
                 Spacer(minLength: 0)
                 if !player.isAlive { Text("阵亡").font(.caption).foregroundStyle(.gray) }
                 else if isCollateralVictim { Text("借刀目标").font(.caption.weight(.bold)).foregroundStyle(.orange) }
-                else if canTarget { Text(selectedTargetCard?.kind == .collateral ? "持刀角色" : "攻击").font(.caption.weight(.bold)).foregroundStyle(.orange) }
+                else if canTarget { Text(isSpearTarget ? "丈八蛇矛目标" : (selectedTargetCard?.kind == .collateral ? "持刀角色" : "攻击")).font(.caption.weight(.bold)).foregroundStyle(.orange) }
             }
             .padding(10).frame(maxWidth: .infinity, minHeight: 78)
             .background(RoundedRectangle(cornerRadius: 16).fill(isDamaged ? Color.red.opacity(0.28) : (isTurn ? Color.white.opacity(0.14) : Color.black.opacity(0.18))))
@@ -312,8 +314,19 @@ private struct ContentView: View {
                 }
                 .padding(12).background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
             }
+            weaponChoicePrompt
             Group {
-                if case let .choosingTargetCard(sourceID: 0, targetID, kind) = game.phase {
+                if case let .choosingIceSwordCard(sourceID: 0, targetID, remaining) = game.phase {
+                    weaponTargetCardSelectionView(title: "寒冰剑", targetID: targetID, detail: "还需选择弃置 \(remaining) 张手牌或装备")
+                } else if case let .choosingKylinBowHorse(sourceID: 0, targetID) = game.phase {
+                    weaponTargetCardSelectionView(title: "麒麟弓", targetID: targetID, detail: "选择弃置一匹马；杀仍会造成伤害")
+                } else if case let .choosingAxeCosts(sourceID: 0, targetID, selectedIDs) = game.phase {
+                    axeCostSelectionView(targetID: targetID, selectedIDs: selectedIDs)
+                } else if case let .choosingSpearCosts(selectedIDs) = game.phase {
+                    spearCostSelectionView(selectedIDs: selectedIDs)
+                } else if case let .choosingSpearTarget(selectedIDs) = game.phase {
+                    spearTargetSelectionView(selectedIDs: selectedIDs)
+                } else if case let .choosingTargetCard(sourceID: 0, targetID, kind) = game.phase {
                     targetCardSelectionView(targetID: targetID, kind: kind)
                 } else if case let .choosingHarvest(playerID) = game.phase, playerID == 0 {
                     harvestSelectionView
@@ -346,6 +359,144 @@ private struct ContentView: View {
             .padding(12)
             .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
         }
+    }
+
+    @ViewBuilder
+    private var weaponChoicePrompt: some View {
+        switch game.phase {
+        case let .awaitingDoubleSwordChoice(sourceID, targetID) where targetID == 0:
+            HStack(spacing: 10) {
+                Label("雌雄双股剑：选择弃一张手牌，或让\(game.players[sourceID].general.title)摸一张。", systemImage: "arrow.left.arrow.right")
+                Spacer()
+                Button { run { try game.respondToDoubleSword(discardCardID: nil) }; startAIPlayback() } label: { Label("让其摸牌", systemImage: "square.stack") }
+                    .buttonStyle(.bordered).help("不弃牌，由攻击者摸一张").disabled(isVoiceSpeaking || isAIPlaying)
+                ForEach(game.human.hand) { card in
+                    Button { run { try game.respondToDoubleSword(discardCardID: card.id) }; startAIPlayback() } label: { Label("弃【\(card.title)】", systemImage: "trash") }
+                        .buttonStyle(.borderedProminent).tint(.orange).help("弃置这张手牌，避免攻击者摸牌").disabled(isVoiceSpeaking || isAIPlaying)
+                }
+            }
+            .padding(12).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        case let .awaitingIceSwordChoice(sourceID, targetID) where sourceID == 0:
+            HStack {
+                Label("寒冰剑：放弃本次伤害，改为弃置\(game.players[targetID].general.title)至多两张手牌或装备？", systemImage: "snowflake")
+                Spacer()
+                Button { run { try game.chooseIceSword(use: false) }; startAIPlayback() } label: { Label("造成伤害", systemImage: "heart.fill") }
+                    .buttonStyle(.bordered).help("不发动寒冰剑，杀正常造成伤害").disabled(isVoiceSpeaking || isAIPlaying)
+                Button { run { try game.chooseIceSword(use: true) }; startAIPlayback() } label: { Label("发动寒冰剑", systemImage: "snowflake") }
+                    .buttonStyle(.borderedProminent).tint(.blue).help("防止伤害并选择弃置目标的牌").disabled(isVoiceSpeaking || isAIPlaying)
+            }
+            .padding(12).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        case let .awaitingAxeChoice(sourceID, targetID) where sourceID == 0:
+            HStack {
+                Label("贯石斧：\(game.players[targetID].general.title)已闪避。弃两张其他牌可令杀命中。", systemImage: "hammer.fill")
+                Spacer()
+                Button { run { try game.chooseAxe(use: false) }; startAIPlayback() } label: { Label("接受闪避", systemImage: "xmark") }
+                    .buttonStyle(.bordered).help("不弃牌，杀被闪避").disabled(isVoiceSpeaking || isAIPlaying)
+                Button { run { try game.chooseAxe(use: true) }; startAIPlayback() } label: { Label("选择两张牌", systemImage: "hand.raised") }
+                    .buttonStyle(.borderedProminent).tint(.orange).help("选择两张手牌或装备作为弃牌代价").disabled(isVoiceSpeaking || isAIPlaying)
+            }
+            .padding(12).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        case let .awaitingKylinBowChoice(sourceID, targetID) where sourceID == 0:
+            HStack {
+                Label("麒麟弓：杀命中后，可弃置\(game.players[targetID].general.title)装备区的一匹马。", systemImage: "scope")
+                Spacer()
+                Button { run { try game.chooseKylinBow(use: false) }; startAIPlayback() } label: { Label("不弃马", systemImage: "arrow.uturn.backward") }
+                    .buttonStyle(.bordered).help("保留目标的马，杀仍造成伤害").disabled(isVoiceSpeaking || isAIPlaying)
+                Button { run { try game.chooseKylinBow(use: true) }; startAIPlayback() } label: { Label("选择马匹", systemImage: "horse") }
+                    .buttonStyle(.borderedProminent).tint(.orange).help("选择目标装备区的一匹马弃置").disabled(isVoiceSpeaking || isAIPlaying)
+            }
+            .padding(12).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        default: EmptyView()
+        }
+    }
+
+    private func weaponTargetCardSelectionView(title: String, targetID: Int, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("\(title)：选择\(game.players[targetID].general.title)的一张牌", systemImage: "hand.tap")
+                .font(.headline).foregroundStyle(.orange)
+            Text(detail).font(.caption).foregroundStyle(.white.opacity(0.72))
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) { ForEach(game.targetCardOptions) { option in targetCardOptionButton(option) } }
+                    .padding(.horizontal, 16).padding(.vertical, 18)
+            }
+            .scrollIndicators(.hidden).frame(height: 222)
+        }
+        .padding(12).background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func axeCostSelectionView(targetID: Int, selectedIDs: [Int]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("贯石斧：选择两张牌弃置，强制命中\(game.players[targetID].general.title)", systemImage: "hammer.fill")
+                    .font(.headline).foregroundStyle(.orange)
+                Spacer()
+                Text("已选 \(selectedIDs.count)/2").font(.subheadline.weight(.bold)).foregroundStyle(.white.opacity(0.8))
+                Button { run { try game.confirmAxeCosts() }; startAIPlayback() } label: { Label("确认弃置", systemImage: "checkmark.circle.fill") }
+                    .buttonStyle(.borderedProminent).tint(.orange).help("弃置选中的两张牌并强制命中")
+                    .disabled(selectedIDs.count != 2 || isVoiceSpeaking || isAIPlaying)
+            }
+            Text("可选手牌或装备；贯石斧本身不能作为代价。")
+                .font(.caption).foregroundStyle(.white.opacity(0.72))
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
+                    ForEach(game.axeCostOptions) { option in
+                        Button { run { try game.toggleAxeCost(cardID: option.id) } } label: {
+                            VStack(spacing: 4) {
+                                cardFace(option.card, selected: selectedIDs.contains(option.id), isHovered: false, isHarvest: true)
+                                Text(option.zone.title).font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.78))
+                            }
+                        }
+                        .buttonStyle(.plain).help("选择弃置【\(option.card.title)】· \(option.zone.title)")
+                        .disabled(isVoiceSpeaking || isAIPlaying || (!selectedIDs.contains(option.id) && selectedIDs.count == 2))
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 18)
+            }
+            .scrollIndicators(.hidden).frame(height: 222)
+        }
+        .padding(12).background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func spearCostSelectionView(selectedIDs: [Int]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("丈八蛇矛：选择两张手牌当作杀", systemImage: "arrow.left.arrow.right")
+                    .font(.headline).foregroundStyle(.orange)
+                Spacer()
+                Text("已选 \(selectedIDs.count)/2").font(.subheadline.weight(.bold))
+                Button { run { try game.confirmSpearCosts() } } label: { Label("选择目标", systemImage: "checkmark.circle.fill") }
+                    .buttonStyle(.borderedProminent).tint(.orange).help("确认两张手牌，然后选择杀的目标")
+                    .disabled(selectedIDs.count != 2 || isVoiceSpeaking || isAIPlaying)
+                Button { game.cancelSpearSlash() } label: { Label("取消", systemImage: "xmark.circle") }
+                    .buttonStyle(.bordered).help("取消丈八蛇矛的使用，不弃牌")
+            }
+            Text("只从手牌中选择；确认目标前不会弃牌。").font(.caption).foregroundStyle(.white.opacity(0.72))
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
+                    ForEach(orderedHand) { card in
+                        Button { run { try game.toggleSpearCost(cardID: card.id) } } label: {
+                            cardFace(card, selected: selectedIDs.contains(card.id), isHovered: hoveredCardID == card.id, isHarvest: true)
+                        }
+                        .buttonStyle(.plain).help("选择【\(card.title)】作为丈八蛇矛代价")
+                        .disabled(isVoiceSpeaking || isAIPlaying || (!selectedIDs.contains(card.id) && selectedIDs.count == 2))
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 18)
+            }
+            .scrollIndicators(.hidden).frame(height: 222)
+        }
+        .padding(12).background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func spearTargetSelectionView(selectedIDs: [Int]) -> some View {
+        HStack {
+            Label("已选两张手牌当杀：请点击桌面上的合法目标。", systemImage: "scope")
+            Spacer()
+            Button { game.cancelSpearSlash() } label: { Label("取消", systemImage: "xmark.circle") }
+                .buttonStyle(.bordered).help("取消丈八蛇矛的使用，不弃牌")
+        }
+        .padding(12).background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityLabel("已选择 \(selectedIDs.count) 张牌，选择丈八蛇矛杀的目标")
     }
 
     private func cardButton(_ card: Card) -> some View {
@@ -475,7 +626,7 @@ private struct ContentView: View {
     }
 
     private func targetCardOptionButton(_ option: TargetCardOption) -> some View {
-        Button { chooseTargetCard(option.id) } label: {
+        Button { chooseSelectedTargetCard(option.id) } label: {
             Group {
                 if option.zone.isHidden {
                     ZStack {
@@ -509,6 +660,19 @@ private struct ContentView: View {
         startAIPlayback()
     }
 
+    private func chooseSelectedTargetCard(_ id: Int) {
+        switch game.phase {
+        case .choosingIceSwordCard:
+            run { try game.chooseIceSwordCard(cardID: id) }
+        case .choosingKylinBowHorse:
+            run { try game.chooseKylinBowHorse(cardID: id) }
+        default:
+            chooseTargetCard(id)
+            return
+        }
+        startAIPlayback()
+    }
+
     private var choosingCollateralWeaponOwnerID: Int? {
         guard case let .choosingCollateralTarget(_, weaponOwnerID) = game.phase else { return nil }
         return weaponOwnerID
@@ -516,6 +680,11 @@ private struct ContentView: View {
 
     private func chooseCollateralTarget(_ id: Int) {
         run { try game.chooseCollateralTarget(id) }
+        startAIPlayback()
+    }
+
+    private func useSpearSlash(on targetID: Int) {
+        run { try game.chooseSpearTarget(targetID) }
         startAIPlayback()
     }
 
@@ -560,10 +729,20 @@ private struct ContentView: View {
                 Button { run { try game.drawForTurn() }; startAIPlayback() } label: { Label("摸两张牌", systemImage: "square.stack.3d.up") }
                     .buttonStyle(.borderedProminent).tint(.orange).controlSize(.large)
             case .action:
-                Button { finishTurn() } label: { Label("结束回合", systemImage: "arrow.right.circle.fill") }
-                    .buttonStyle(.borderedProminent).tint(Color(red: 0.65, green: 0.31, blue: 0.18)).controlSize(.large)
+                HStack {
+                    if game.canBeginSpearSlash {
+                        Button { run { try game.beginSpearSlash() } } label: { Label("蛇矛当杀", systemImage: "arrow.left.arrow.right") }
+                            .buttonStyle(.borderedProminent).tint(.orange).controlSize(.large)
+                            .help("弃两张手牌当杀使用").accessibilityLabel("丈八蛇矛弃两张手牌当杀")
+                    }
+                    Button { finishTurn() } label: { Label("结束回合", systemImage: "arrow.right.circle.fill") }
+                        .buttonStyle(.borderedProminent).tint(Color(red: 0.65, green: 0.31, blue: 0.18)).controlSize(.large)
+                }
             case .choosingHarvest, .choosingTargetCard, .choosingCollateralTarget, .awaitingCollateralSlash,
-                 .awaitingDodge, .awaitingDuelSlash, .respondingToTrick, .dying, .gameOver: EmptyView()
+                 .awaitingDodge, .awaitingDuelSlash, .respondingToTrick, .dying, .gameOver,
+                 .awaitingDoubleSwordChoice, .awaitingIceSwordChoice, .choosingIceSwordCard,
+                 .awaitingAxeChoice, .choosingAxeCosts, .awaitingKylinBowChoice, .choosingKylinBowHorse,
+                 .choosingSpearCosts, .choosingSpearTarget: EmptyView()
             }
         }
         .disabled(isAIPlaying || isVoiceSpeaking || game.currentPlayerID != 0)
@@ -673,6 +852,15 @@ private struct ContentView: View {
         case let .choosingTargetCard(_, targetID, kind): "\(kind.title)：选择\(game.players[targetID].general.title)区域中的一张手牌、装备或判定牌。"
         case let .choosingCollateralTarget(_, weaponOwnerID): "借刀杀人：选择\(game.players[weaponOwnerID].general.title)攻击范围内的一名角色。"
         case let .awaitingCollateralSlash(_, weaponOwnerID, targetID): "\(game.players[weaponOwnerID].general.title)需对\(game.players[targetID].general.title)使用杀，否则交出武器。"
+        case let .awaitingDoubleSwordChoice(_, targetID): "雌雄双股剑：\(game.players[targetID].general.title)可弃一张手牌；否则攻击者摸一张。"
+        case let .awaitingIceSwordChoice(_, targetID): "寒冰剑：可防止杀的伤害，改为弃置\(game.players[targetID].general.title)至多两张手牌或装备。"
+        case let .choosingIceSwordCard(_, targetID, remaining): "寒冰剑：选择\(game.players[targetID].general.title)的牌，还需选择\(remaining)张。"
+        case let .awaitingAxeChoice(_, targetID): "贯石斧：杀被闪避。可弃两张其他牌强制命中\(game.players[targetID].general.title)。"
+        case let .choosingAxeCosts(_, targetID, selectedIDs): "贯石斧：选择两张牌弃置，令对\(game.players[targetID].general.title)的杀命中（已选\(selectedIDs.count)/2）。"
+        case let .awaitingKylinBowChoice(_, targetID): "麒麟弓：杀命中后，可弃置\(game.players[targetID].general.title)装备区的一匹马。"
+        case let .choosingKylinBowHorse(_, targetID): "麒麟弓：选择弃置\(game.players[targetID].general.title)装备区的一匹马。"
+        case let .choosingSpearCosts(selectedIDs): "丈八蛇矛：选择两张手牌当杀（已选\(selectedIDs.count)/2）。"
+        case .choosingSpearTarget: "丈八蛇矛：点击一名合法角色，将两张手牌当杀使用。"
         case .awaitingDodge: "响应阶段：可以打出【\(game.responseCardKind.title)】，或承受伤害。"
         case .respondingToTrick: "无懈可击响应：可打出【无懈可击】抵消锦囊，也可以放弃响应。"
         case .awaitingDuelSlash: "决斗响应：双方轮流打出【杀】；无法响应的一方受到 1 点伤害。"

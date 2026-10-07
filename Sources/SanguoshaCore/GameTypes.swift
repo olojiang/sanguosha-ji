@@ -150,14 +150,14 @@ public enum CardKind: String, CaseIterable, Equatable, Sendable {
         case .defensiveHorse: "防御马：其他角色计算与你的距离 +1。"
         case .eightTrigrams: "需要使用闪时发动：翻开牌堆顶一张牌。红色视为使用闪并抵消攻击；黑色判定失败，受到攻击伤害。判定牌进入弃牌堆。"
         case .blackShield: "仁王盾：免疫黑色【杀】；青釭剑可无视此防具。"
-        case .doubleSword: "雌雄双股剑：攻击范围 2。"
-        case .iceSword: "武器，攻击范围 2；弃牌特效尚未实现。"
+        case .doubleSword: "雌雄双股剑：杀异性角色时，其可弃一张手牌；否则你摸一张牌。攻击范围 2。"
+        case .iceSword: "寒冰剑：杀将造成伤害时，可防止伤害并依次弃置目标手牌或装备区最多两张牌。攻击范围 2。"
         case .greenDragonBlade: "武器，攻击范围 3。"
         case .QinggangSword: "青釭剑：攻击范围 2；使用【杀】时无视目标防具。"
-        case .serpentSpear: "武器，攻击范围 3。"
-        case .kylinBow: "武器，攻击范围 5。"
+        case .serpentSpear: "丈八蛇矛：出牌阶段可弃两张手牌当杀使用；确认目标前不会弃牌。攻击范围 3。"
+        case .kylinBow: "麒麟弓：杀造成伤害时，可弃置目标装备区的一匹马。攻击范围 5。"
         case .crossbow: "武器，攻击范围 1；允许连续使用杀。"
-        case .axe: "武器，攻击范围 3；强制命中特效尚未实现。"
+        case .axe: "贯石斧：杀被闪抵消时，可同时弃两张其他牌令其强制命中。攻击范围 3。"
         case .halberd: "武器，攻击范围 4。"
         }
     }
@@ -228,6 +228,10 @@ public enum General: String, CaseIterable, Equatable, Hashable, Sendable {
         case .lvBu: "吕布"
         case .diaoChan: "貂蝉"
         }
+    }
+
+    public var isFemale: Bool {
+        [.zhenJi, .daQiao, .sunShangXiang, .diaoChan].contains(self)
     }
 
     public var skill: String {
@@ -370,6 +374,15 @@ public enum GamePhase: Equatable {
     case choosingCollateralTarget(sourceID: Int, weaponOwnerID: Int)
     case awaitingCollateralSlash(sourceID: Int, weaponOwnerID: Int, targetID: Int)
     case awaitingDodge(targetID: Int, attackerID: Int)
+    case awaitingDoubleSwordChoice(sourceID: Int, targetID: Int)
+    case awaitingIceSwordChoice(sourceID: Int, targetID: Int)
+    case choosingIceSwordCard(sourceID: Int, targetID: Int, remaining: Int)
+    case awaitingAxeChoice(sourceID: Int, targetID: Int)
+    case choosingAxeCosts(sourceID: Int, targetID: Int, selectedIDs: [Int])
+    case awaitingKylinBowChoice(sourceID: Int, targetID: Int)
+    case choosingKylinBowHorse(sourceID: Int, targetID: Int)
+    case choosingSpearCosts(selectedIDs: [Int])
+    case choosingSpearTarget(selectedIDs: [Int])
     case awaitingDuelSlash(responderID: Int, challengerID: Int)
     case respondingToTrick(responderID: Int)
     case dying(targetID: Int, responderID: Int)

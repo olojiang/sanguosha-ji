@@ -16,8 +16,10 @@ public enum GameVoiceCue {
         line.contains("使用杀") || line.contains("使用桃") || line.contains("使用酒")
             || line.contains("使用锦囊【") || line.contains("使用无懈可击") || line.contains("打出【")
             || line.contains("装备了") || line.contains("以杀应对决斗")
+            || line.contains("当作【杀】")
             || line.contains("从五谷丰登中获得")
             || line.contains("弃置了") && line.contains("【")
+            || ["雌雄双股剑", "寒冰剑", "贯石斧", "麒麟弓"].contains(where: line.contains)
             || line.contains("获得【") || line.contains("造成") || line.contains("击杀了")
     }
 }

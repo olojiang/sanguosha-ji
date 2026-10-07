@@ -231,6 +231,119 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(redGame.players[1].hp, redTargetHP - 1)
     }
 
+    func testIceSwordPreventsDamageAndLetsAttackerDiscardTwoChosenTargetCards() throws {
+        var game = GameEngine.newGame(
+            seed: 910, hands: [[.slash], [.peach], [], []],
+            startingEquipment: [[.iceSword], [.defensiveHorse], [], []]
+        )
+        try game.drawForTurn()
+        let slash = try XCTUnwrap(game.human.hand.first { $0.kind == .slash })
+        let peach = try XCTUnwrap(game.players[1].hand.first { $0.kind == .peach })
+        let horse = try XCTUnwrap(game.players[1].equipment[.defensiveHorse])
+        let hp = game.players[1].hp
+
+        try game.play(cardID: slash.id, targetID: 1)
+
+        XCTAssertEqual(game.phase, .awaitingIceSwordChoice(sourceID: 0, targetID: 1))
+        try game.chooseIceSword(use: true)
+        XCTAssertEqual(game.targetCardOptions.map(\.id).sorted(), [peach.id, horse.id].sorted())
+        try game.chooseIceSwordCard(cardID: peach.id)
+        try game.chooseIceSwordCard(cardID: horse.id)
+
+        XCTAssertEqual(game.players[1].hp, hp)
+        XCTAssertFalse(game.players[1].hand.contains { $0.id == peach.id })
+        XCTAssertNil(game.players[1].equipment[.defensiveHorse])
+        XCTAssertTrue(game.log.contains { $0.contains("寒冰剑") && $0.contains("【桃】") })
+    }
+
+    func testDoubleSwordLetsAnOpposingFemaleTargetDiscardAHandCard() throws {
+        let gameSeed = (1...512).map(UInt64.init).first { seed in
+            GameEngine.newGame(seed: seed, hands: [[.slash], [.peach], [], []], startingEquipment: [[.doubleSword], [], [], []], humanGeneral: .caoCao, generalPool: General.allCases).players[1].general.isFemale
+        }
+        var game = try XCTUnwrap(gameSeed.map { GameEngine.newGame(seed: $0, hands: [[.slash], [.peach], [], []], startingEquipment: [[.doubleSword], [], [], []], humanGeneral: .caoCao, generalPool: General.allCases) })
+        try game.drawForTurn()
+        let slash = try XCTUnwrap(game.human.hand.first { $0.kind == .slash })
+        let peachID = try XCTUnwrap(game.players[1].hand.first { $0.kind == .peach }).id
+
+        try game.play(cardID: slash.id, targetID: 1)
+
+        XCTAssertFalse(game.players[1].hand.contains { $0.id == peachID })
+        XCTAssertTrue(game.log.contains { $0.contains("雌雄双股剑") && $0.contains("弃置手牌【桃】") })
+    }
+
+    func testAxeDiscardsTwoChosenCardsAfterDodgeToForceSlashDamage() throws {
+        var game = GameEngine.newGame(
+            seed: 911, hands: [[.slash, .peach, .wine], [.dodge], [], []],
+            startingEquipment: [[.axe], [], [], []]
+        )
+        try game.drawForTurn()
+        let slash = try XCTUnwrap(game.human.hand.first { $0.kind == .slash })
+        let peach = try XCTUnwrap(game.human.hand.first { $0.kind == .peach })
+        let wine = try XCTUnwrap(game.human.hand.first { $0.kind == .wine })
+        let hp = game.players[1].hp
+
+        try game.play(cardID: slash.id, targetID: 1)
+
+        XCTAssertEqual(game.phase, .awaitingAxeChoice(sourceID: 0, targetID: 1))
+        try game.chooseAxe(use: true)
+        try game.commitAxeCosts(cardIDs: [peach.id, wine.id])
+
+        XCTAssertEqual(game.players[1].hp, hp - 1)
+        XCTAssertTrue(game.discardPile.contains { $0.id == peach.id })
+        XCTAssertTrue(game.discardPile.contains { $0.id == wine.id })
+        XCTAssertTrue(game.log.contains { $0.contains("贯石斧") && $0.contains("强制命中") })
+        let axeEvent = try XCTUnwrap(game.log.first { $0.contains("贯石斧") && $0.contains("强制命中") })
+        XCTAssertTrue(axeEvent.contains("【桃】") && axeEvent.contains("【酒】"), axeEvent)
+        XCTAssertTrue(GameVoiceCue.lines(from: [axeEvent]).contains(axeEvent))
+    }
+
+    func testKylinBowCanDiscardOneTargetHorseAndSlashStillDealsDamage() throws {
+        var game = GameEngine.newGame(
+            seed: 912, hands: [[.slash], [], [], []],
+            startingEquipment: [[.kylinBow], [.offensiveHorse, .defensiveHorse], [], []]
+        )
+        try game.drawForTurn()
+        let slash = try XCTUnwrap(game.human.hand.first { $0.kind == .slash })
+        let horse = try XCTUnwrap(game.players[1].equipment[.defensiveHorse])
+        let hp = game.players[1].hp
+
+        try game.play(cardID: slash.id, targetID: 1)
+
+        XCTAssertEqual(game.phase, .awaitingKylinBowChoice(sourceID: 0, targetID: 1))
+        try game.chooseKylinBow(use: true)
+        try game.chooseKylinBowHorse(cardID: horse.id)
+
+        XCTAssertEqual(game.players[1].hp, hp - 1)
+        XCTAssertNil(game.players[1].equipment[.defensiveHorse])
+        XCTAssertNotNil(game.players[1].equipment[.offensiveHorse])
+    }
+
+    func testSerpentSpearUsesTwoChosenHandCardsAsSlashAfterTargetIsConfirmed() throws {
+        var game = GameEngine.newGame(
+            seed: 913, hands: [[.peach, .wine, .dodge], [], [], []],
+            startingEquipment: [[.serpentSpear], [], [], []]
+        )
+        try game.drawForTurn()
+        let peach = try XCTUnwrap(game.human.hand.first { $0.kind == .peach })
+        let wine = try XCTUnwrap(game.human.hand.first { $0.kind == .wine })
+        let hp = game.players[1].hp
+
+        XCTAssertTrue(game.canBeginSpearSlash)
+        try game.beginSpearSlash()
+        try game.toggleSpearCost(cardID: peach.id)
+        try game.toggleSpearCost(cardID: wine.id)
+        try game.confirmSpearCosts()
+        XCTAssertTrue(game.human.hand.contains { $0.id == peach.id })
+        try game.chooseSpearTarget(1)
+
+        XCTAssertEqual(game.players[1].hp, hp - 1)
+        XCTAssertFalse(game.human.hand.contains { $0.id == peach.id || $0.id == wine.id })
+        XCTAssertTrue(game.discardPile.contains { $0.id == peach.id || $0.id == wine.id })
+        let event = try XCTUnwrap(game.log.first { $0.contains("当作【杀】") })
+        XCTAssertTrue(event.contains("【桃】") && event.contains("【酒】"), event)
+        XCTAssertTrue(GameVoiceCue.lines(from: [event]).contains(event))
+    }
+
     func testNullificationOpensSeatOrderedResponseWindowAndCancelsTrick() throws {
         var game = GameEngine.newGame(seed: 781, hands: [[.dismantle], [.nullification], [], [.peach]])
         try game.drawForTurn()
