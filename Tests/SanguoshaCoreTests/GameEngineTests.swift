@@ -65,6 +65,18 @@ final class GameEngineTests: XCTestCase {
         ])
     }
 
+    func testSingleHistoryLineFormattingMatchesTheBatchFormatter() {
+        let players = [
+            Player(id: 0, name: "你", role: .rebel, isHuman: true, general: .guanYu),
+            Player(id: 1, name: "电脑3", role: .lord, isHuman: false, general: .luXun)
+        ]
+        let formatter = GameLogPresentation(players: players)
+        let line = "电脑3 对 你 使用杀；电脑3 受到 1 点伤害。"
+
+        XCTAssertEqual(formatter.visibleLine(from: line), "陆逊 对 你 使用杀；陆逊 受到 1 点伤害。")
+        XCTAssertEqual(GameLogPresentation.visibleLines(from: [line], players: players), [formatter.visibleLine(from: line)])
+    }
+
     func testDismantleHistoryAndVoiceNameTheActorTargetAndDiscardedCard() throws {
         var game = GameEngine.newGame(seed: 327, hands: [[.dismantle], [.peach], [], []])
         try game.drawForTurn()

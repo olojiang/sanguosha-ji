@@ -585,11 +585,12 @@ private struct ContentView: View {
         .accessibilityLabel("行动速览和完整历史")
     }
 
-    private var visibleLog: [String] {
-        GameLogPresentation.visibleLines(from: game.log, players: game.players)
-    }
+    private var logPresentation: GameLogPresentation { GameLogPresentation(players: game.players) }
 
-    private var visibleRecentActivity: [String] { Array(visibleLog.suffix(3)) }
+    private var visibleRecentActivity: [String] {
+        let presentation = logPresentation
+        return game.log.suffix(3).map { presentation.visibleLine(from: $0) }
+    }
 
     private var recentActivityView: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -608,10 +609,12 @@ private struct ContentView: View {
     }
 
     private var historyScrollView: some View {
-        ScrollViewReader { proxy in
+        let presentation = logPresentation
+        return ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(visibleLog.enumerated()), id: \.offset) { index, line in
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(game.log.indices, id: \.self) { index in
+                        let line = presentation.visibleLine(from: game.log[index])
                         Text(line).font(.system(size: 13, weight: index == game.log.count - 1 ? .semibold : .regular))
                             .foregroundStyle(index == game.log.count - 1 ? .orange : .white.opacity(0.72))
                             .frame(maxWidth: .infinity, alignment: .leading)
