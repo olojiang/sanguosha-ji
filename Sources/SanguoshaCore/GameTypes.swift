@@ -13,6 +13,29 @@ public enum Role: String, CaseIterable, Equatable {
     }
 }
 
+public enum IdentityConfiguration {
+    public static let supportedPlayerCounts = Array(4...8)
+
+    public static func summary(forPlayerCount count: Int) -> String? {
+        guard let roles = roles(forPlayerCount: count) else { return nil }
+        return [Role.lord, .loyalist, .rebel, .spy].compactMap { role in
+            let amount = roles.filter { $0 == role }.count
+            return amount == 0 ? nil : "\(role.title)×\(amount)"
+        }.joined(separator: "、")
+    }
+
+    public static func roles(forPlayerCount count: Int) -> [Role]? {
+        switch count {
+        case 4: [.lord, .loyalist, .rebel, .spy]
+        case 5: [.lord, .loyalist, .rebel, .rebel, .spy]
+        case 6: [.lord, .loyalist, .rebel, .rebel, .rebel, .spy]
+        case 7: [.lord, .loyalist, .loyalist, .rebel, .rebel, .rebel, .spy]
+        case 8: [.lord, .loyalist, .loyalist, .rebel, .rebel, .rebel, .rebel, .spy]
+        default: nil
+        }
+    }
+}
+
 public enum CardCategory: String, CaseIterable, Equatable {
     case basic, trick, equipment
     public var title: String {

@@ -335,6 +335,22 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(game.phase, .drawing)
     }
 
+    func testStandardIdentityConfigurationsSupportFourThroughEightPlayers() {
+        let expectedRebels = [4: 1, 5: 2, 6: 3, 7: 3, 8: 4]
+        let expectedLoyalists = [4: 1, 5: 1, 6: 1, 7: 2, 8: 2]
+
+        for count in 4...8 {
+            let game = GameEngine.newGame(seed: UInt64(count), generalPool: General.allCases, playerCount: count)
+            XCTAssertEqual(game.players.count, count)
+            XCTAssertEqual(game.players.filter { $0.role == .lord }.count, 1)
+            XCTAssertEqual(game.players.filter { $0.role == .loyalist }.count, expectedLoyalists[count])
+            XCTAssertEqual(game.players.filter { $0.role == .rebel }.count, expectedRebels[count])
+            XCTAssertEqual(game.players.filter { $0.role == .spy }.count, 1)
+            XCTAssertEqual(game.players.map(\.hand.count), Array(repeating: 4, count: count))
+            XCTAssertEqual(Set(game.players.map(\.general)).count, count)
+        }
+    }
+
     func testDrawingPhaseDrawsTwoCardsAndBeginsActionPhase() throws {
         var game = GameEngine.newGame(seed: 7)
 

@@ -35,24 +35,25 @@ public struct GameEngine {
     private var pendingHarvestSourceID: Int?
     private var pendingTrick: PendingTrick?
 
-    public static func newGame(seed: UInt64 = UInt64.random(in: 1...UInt64.max), hands: [[CardKind]]? = nil, startingHP: [Int]? = nil, humanGeneral: General? = .caoCao, humanRole: Role? = .lord, generalPool: [General] = [.caoCao, .simaYi, .zhangFei, .zhaoYun]) -> GameEngine {
-        GameEngine(seed: seed, hands: hands, startingHP: startingHP, humanGeneral: humanGeneral, humanRole: humanRole, generalPool: generalPool)
+    public static func newGame(seed: UInt64 = UInt64.random(in: 1...UInt64.max), hands: [[CardKind]]? = nil, startingHP: [Int]? = nil, humanGeneral: General? = .caoCao, humanRole: Role? = .lord, generalPool: [General] = [.caoCao, .simaYi, .zhangFei, .zhaoYun], playerCount: Int = 4) -> GameEngine {
+        GameEngine(seed: seed, hands: hands, startingHP: startingHP, humanGeneral: humanGeneral, humanRole: humanRole, generalPool: generalPool, playerCount: playerCount)
     }
 
-    private init(seed: UInt64, hands: [[CardKind]]?, startingHP: [Int]?, humanGeneral: General?, humanRole: Role?, generalPool: [General]) {
+    private init(seed: UInt64, hands: [[CardKind]]?, startingHP: [Int]?, humanGeneral: General?, humanRole: Role?, generalPool: [General], playerCount: Int) {
         random = SeededGenerator(seed: seed)
-        var roles = Role.allCases
+        let count = IdentityConfiguration.supportedPlayerCounts.contains(playerCount) ? playerCount : 4
+        var roles = IdentityConfiguration.roles(forPlayerCount: count)!
         roles.shuffle(using: &random)
         if let humanRole, let selected = roles.firstIndex(of: humanRole) { roles.swapAt(0, selected) }
         var availableGenerals = General.allCases.filter { generalPool.contains($0) }
         if let humanGeneral, !availableGenerals.contains(humanGeneral) { availableGenerals.append(humanGeneral) }
-        for general in General.allCases where availableGenerals.count < 4 && !availableGenerals.contains(general) {
+        for general in General.allCases where availableGenerals.count < count && !availableGenerals.contains(general) {
             availableGenerals.append(general)
         }
         availableGenerals.shuffle(using: &random)
         let selectedGeneral = humanGeneral ?? availableGenerals.removeFirst()
         availableGenerals.removeAll { $0 == selectedGeneral }
-        let generals = [selectedGeneral] + Array(availableGenerals.prefix(3))
+        let generals = [selectedGeneral] + Array(availableGenerals.prefix(count - 1))
         players = roles.enumerated().map { index, role in
             Player(id: index, name: index == 0 ? "你" : "电脑\(index)", role: role, isHuman: index == 0, general: generals[index], hp: generals[index].maxHP + (role == .lord ? 1 : 0))
         }

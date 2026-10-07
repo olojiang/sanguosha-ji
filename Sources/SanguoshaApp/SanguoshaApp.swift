@@ -12,7 +12,7 @@ struct SanguoshaJiApp: App {
 }
 
 private struct ContentView: View {
-    @State private var game = GameEngine.newGame(humanGeneral: nil, humanRole: nil, generalPool: General.allCases)
+    @State private var game = GameEngine.newGame(humanGeneral: nil, humanRole: nil, generalPool: General.allCases, playerCount: 4)
     @State private var selectedCardID: Int?
     @State private var hoveredCardID: Int?
     @State private var showRules = false
@@ -22,6 +22,7 @@ private struct ContentView: View {
     @State private var damagedPlayers = Set<Int>()
     @State private var selectedRole: Role?
     @State private var selectedGeneral: General?
+    @State private var selectedPlayerCount = 4
     @State private var voicePlayer = CardVoicePlayer()
     @State private var isVoiceSpeaking = false
 
@@ -59,8 +60,8 @@ private struct ContentView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text("三国杀 · 四人身份局").font(.system(size: 26, weight: .bold, design: .serif))
-                Text("你是\(game.human.role.title) · \(game.human.general.title) · 3 位电脑玩家").font(.callout).foregroundStyle(.white.opacity(0.62))
+                Text("三国杀 · 身份局").font(.system(size: 26, weight: .bold, design: .serif))
+                Text("你是\(game.human.role.title) · \(game.human.general.title) · \(game.players.count) 人局").font(.callout).foregroundStyle(.white.opacity(0.62))
             }
             Spacer()
             if isVoiceSpeaking { Label("语音播报中", systemImage: "waveform").font(.caption).foregroundStyle(.orange) }
@@ -80,6 +81,15 @@ private struct ContentView: View {
                 }
             } label: { Label("武将：\(game.human.general.title)", systemImage: "person.crop.circle.badge.checkmark") }
                 .buttonStyle(.bordered)
+            Menu {
+                ForEach(IdentityConfiguration.supportedPlayerCounts, id: \.self) { count in
+                    let summary = IdentityConfiguration.summary(forPlayerCount: count) ?? ""
+                    Button("\(count) 人局 · \(summary)") {
+                        newGame(role: selectedRole, general: selectedGeneral, playerCount: count)
+                    }
+                }
+            } label: { Label("\(game.players.count)人", systemImage: "person.3") }
+                .buttonStyle(.bordered)
             Button { showRules = true } label: { Label("新手规则", systemImage: "book.closed") }.buttonStyle(.bordered)
             Button { newGame(role: selectedRole, general: selectedGeneral) } label: { Label("重新开始", systemImage: "arrow.clockwise") }
                 .buttonStyle(.borderedProminent).tint(Color(red: 0.65, green: 0.31, blue: 0.18))
@@ -87,21 +97,9 @@ private struct ContentView: View {
     }
 
     private func table(logHeight: CGFloat, compact: Bool) -> some View {
-        VStack(spacing: compact ? 6 : 15) {
-            playerTile(2)
-            HStack(spacing: 12) {
-                playerTile(3)
-                VStack(spacing: compact ? 7 : 12) {
-                    Image(systemName: "sparkle").font(.system(size: compact ? 22 : 27)).foregroundStyle(.orange.opacity(0.85))
-                    Text("身份局").font(.headline)
-                    Divider().overlay(.white.opacity(0.2)).frame(width: 130)
-                    Text(phaseHint).font(.subheadline.weight(.medium)).multilineTextAlignment(.center)
-                        .foregroundStyle(.white.opacity(0.9)).frame(width: 170, height: compact ? 44 : 60)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                playerTile(1)
-            }
-            playerTile(0)
+        VStack(spacing: compact ? 6 : 12) {
+            if game.players.count == 4 { fourPlayerSeats(compact: compact) }
+            else { multiplayerSeats(compact: compact) }
             logView.frame(height: logHeight)
         }
         .padding(compact ? 12 : 18)
@@ -112,6 +110,38 @@ private struct ContentView: View {
         .overlay(alignment: .topTrailing) {
             Text("牌堆  \(game.drawPile.count)").font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.65)).padding(12)
         }
+    }
+
+    private func fourPlayerSeats(compact: Bool) -> some View {
+        VStack(spacing: compact ? 6 : 12) {
+            playerTile(2)
+            HStack(spacing: 12) {
+                playerTile(3)
+                phaseSummary(compact: compact).frame(maxWidth: .infinity, maxHeight: .infinity)
+                playerTile(1)
+            }
+            playerTile(0)
+        }
+    }
+
+    private func multiplayerSeats(compact: Bool) -> some View {
+        VStack(spacing: compact ? 6 : 10) {
+            phaseSummary(compact: compact)
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210, maximum: 330), spacing: 8)], spacing: 8) {
+                    ForEach(game.players.indices, id: \.self) { playerTile($0) }
+                }
+            }.scrollIndicators(.visible)
+        }
+    }
+
+    private func phaseSummary(compact: Bool) -> some View {
+        VStack(spacing: compact ? 5 : 8) {
+            Image(systemName: "sparkle").font(.system(size: compact ? 19 : 25)).foregroundStyle(.orange.opacity(0.85))
+            Text("身份局").font(.headline)
+            Text(phaseHint).font(.subheadline.weight(.medium)).multilineTextAlignment(.center)
+                .foregroundStyle(.white.opacity(0.9)).frame(maxWidth: 320, minHeight: compact ? 34 : 45)
+        }.frame(maxWidth: .infinity)
     }
 
     private func playerTile(_ id: Int) -> some View {
@@ -128,6 +158,7 @@ private struct ContentView: View {
                 }.frame(width: 42, height: 42)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
+                        Text("\(id + 1)号位").font(.system(size: 9, weight: .medium)).foregroundStyle(.white.opacity(0.5))
                         Text(player.general.title).font(.headline)
                         if player.isHuman { badge("你", color: .blue) }
                         if player.role == .lord { badge("主公", color: .orange) }
@@ -580,13 +611,14 @@ private struct ContentView: View {
         }
     }
 
-    private func newGame(role: Role?, general: General?) {
+    private func newGame(role: Role?, general: General?, playerCount: Int? = nil) {
         aiTask?.cancel()
         voicePlayer.stop()
         isAIPlaying = false
         selectedRole = role
         selectedGeneral = general
-        game = GameEngine.newGame(humanGeneral: general, humanRole: role, generalPool: General.allCases)
+        if let playerCount { selectedPlayerCount = playerCount }
+        game = GameEngine.newGame(humanGeneral: general, humanRole: role, generalPool: General.allCases, playerCount: selectedPlayerCount)
         selectedCardID = nil
         message = nil
     }
@@ -698,7 +730,7 @@ private struct RulesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 Text("第一次玩？从这里开始").font(.system(size: 26, weight: .bold, design: .serif))
-                Text("你可以选择或随机获得身份和武将。四人局包含主公、忠臣、反贼、内奸各一名；主公身份公开，其余身份隐藏。观察谁在攻击谁，推理阵营。")
+                Text("你可以选择或随机获得身份和武将。支持 4–8 人身份局，主公、忠臣、反贼、内奸的人数会随局人数变化；主公身份公开，其余身份隐藏。观察谁在攻击谁，推理阵营。")
                 ruleSection("胜利目标", "主公和忠臣：消灭反贼与内奸。反贼：杀死主公。内奸：除掉其他人，最后亲手成为唯一生还者。")
                 ruleSection("每回合怎么走", "1. 摸两张牌。  2. 使用手牌。  3. 手牌多于当前体力时，弃到相同数量。然后轮到下一名存活角色。电脑行动会逐步播放，战报会保留并自动滚到最新行动。")
                 ruleSection("基本牌", "杀：攻击攻击范围内角色。每回合通常一张；张飞与诸葛连弩可连续使用。目标可以打闪响应。\n\n闪：响应杀。赵云可以用杀当闪。\n\n桃：出牌阶段回复自己 1 点体力，也能在濒死时救援。标准牌堆不含酒。")
@@ -706,9 +738,11 @@ private struct RulesView: View {
                 ruleSection("武将与技能", "可选标准版 25 名武将，也可随机抽取；同一局不会重复。武将拥有不同的体力上限和技能，技能说明常驻显示在右侧。目前部分技能效果还在实现中。")
                 ruleSection("怎样判断身份", "反贼通常会攻击主公。忠臣会帮助主公，但也可能暂时不暴露身份。内奸需要控制局势，避免过早成为众矢之的。看行动和出牌，不要只看一次攻击。")
                 ruleSection("牌堆与装备", "标准牌堆共 108 张，含基本牌 53 张、锦囊牌 36 张、装备牌 19 张；每张牌都有标准花色和点数。武器调整攻击范围，进攻马与防御马调整距离。需要打闪时，八卦阵翻开牌堆顶一张牌：红色视为闪并抵消攻击，黑色判定失败并受到伤害；翻出的判定牌会进入弃牌堆。")
-                ruleSection("当前规则边界", "这是四人身份局，不是另一套‘入门规则’。目前仍有规则缺口：闪电与乐不思蜀没有按牌面判定结算；多目标锦囊的无懈可击没有逐目标开窗；借刀杀人没有完整的出杀/交刀流程；多数武将技能和多种武器、防具特效尚未实现。详细清单见项目 README。")
+                ruleSection("身份局人数", "4 人：1 主、1 忠、1 反、1 内。5 人：1 主、1 忠、2 反、1 内。6 人：1 主、1 忠、3 反、1 内。7 人：1 主、2 忠、3 反、1 内。8 人：1 主、2 忠、4 反、1 内。")
+                ruleSection("当前规则边界", "目前仍有规则缺口：闪电与乐不思蜀没有按牌面判定结算；多目标锦囊的无懈可击没有逐目标开窗；借刀杀人没有完整的出杀/交刀流程；多数武将技能和多种武器、防具特效尚未实现。详细清单见项目 README。")
                 Text("规则参考").font(.headline)
                 Link("三国杀官方 FAQ：身份局获胜条件", destination: URL(string: "https://www.sanguosha.com/faq.html")!)
+                Link("三国杀官方模式说明：身份场人数", destination: URL(string: "https://www.sanguosha.com/mode")!)
                 Link("标准版 108 张牌表与 FAQ", destination: URL(string: "https://ks3-cn-beijing.ksyun.com/attachment/74ad98665ac744c138ba8c988d85d149")!)
                 Link("三国杀规则集：基本牌", destination: URL(string: "https://gltjk.com/sanguosha/rules/card/basic.html")!)
                 Link("三国杀规则集：回合流程", destination: URL(string: "https://gltjk.com/sanguosha/rules/flow/game.html")!)
