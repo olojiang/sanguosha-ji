@@ -1,6 +1,7 @@
 import SanguoshaCore
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct SanguoshaJiApp: App {
@@ -12,9 +13,12 @@ struct SanguoshaJiApp: App {
 }
 
 private struct ContentView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var game = GameEngine.newGame(humanGeneral: nil, humanRole: nil, generalPool: General.allCases, playerCount: 4)
     @State private var selectedCardID: Int?
     @State private var hoveredCardID: Int?
+    @State private var handOrder: [Int] = []
+    @State private var draggedCardID: Int?
     @State private var showRules = false
     @State private var message: String?
     @State private var isAIPlaying = false
@@ -55,6 +59,12 @@ private struct ContentView: View {
             Button("再开一局") { newGame(role: selectedRole, general: selectedGeneral) }
         } message: { Text(winnerMessage) }
         .background(LaunchWindowMaximizer())
+        .onAppear {
+            handOrder = HandOrder.reconciling(handOrder, with: game.human.hand.map(\.id))
+        }
+        .onChange(of: game.human.hand.map(\.id)) { _, ids in
+            handOrder = HandOrder.reconciling(handOrder, with: ids)
+        }
     }
 
     private var header: some View {
@@ -299,9 +309,12 @@ private struct ContentView: View {
                                 .foregroundStyle(selectedTargetCard == nil ? .white.opacity(0.62) : .orange)
                             cardHoverHelp
                             ScrollView(.horizontal) {
-                                HStack(spacing: 9) { ForEach(game.human.hand) { card in cardButton(card) } }
+                                HStack(spacing: 12) { ForEach(orderedHand) { card in cardButton(card) } }
                                     .animation(.spring(response: 0.38, dampingFraction: 0.78), value: game.human.hand.map(\.id))
-                            }.scrollIndicators(.hidden).frame(height: 154)
+                            }
+                            .scrollIndicators(.hidden)
+                            .padding(.vertical, 8)
+                            .frame(height: 222)
                         }
                         Spacer(minLength: 4)
                         turnButton
@@ -315,29 +328,35 @@ private struct ContentView: View {
 
     private func cardButton(_ card: Card) -> some View {
         let chosen = selectedCardID == card.id
+        let hovering = hoveredCardID == card.id
         return Button { select(card) } label: {
-            VStack(spacing: 3) {
-                CardIllustrationView(index: card.kind.illustrationIndex)
-                    .frame(width: 90, height: 108)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .allowsHitTesting(false)
-                Text(card.title).font(.system(size: card.title.count > 5 ? 13 : 17, weight: .bold, design: .serif)).lineLimit(1).minimumScaleFactor(0.65)
-                Text(card.category.title).font(.system(size: 10, weight: .medium)).lineLimit(1)
-            }
-            .frame(width: 116, height: 146)
-            .foregroundStyle(card.kind == .dodge ? Color.blue : card.kind == .peach ? Color.red : Color.black)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color(red: 0.94, green: 0.91, blue: 0.82)))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(chosen ? .orange : .white.opacity(0.5), lineWidth: chosen ? 3 : 1))
-            .offset(y: chosen ? -5 : 0)
-            .shadow(color: chosen ? .orange.opacity(0.4) : .clear, radius: chosen ? 10 : 0, y: 3)
+            cardFace(card, chosen: chosen || hovering, isHarvest: false)
+                .scaleEffect(hovering ? 1.07 : 1)
+                .offset(y: hovering || chosen ? -6 : 0)
+                .shadow(color: hovering || chosen ? .orange.opacity(0.38) : .clear, radius: hovering ? 14 : 9, y: 5)
+                .zIndex(hovering ? 2 : 0)
         }
         .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .scale(scale: 0.75)).combined(with: .opacity), removal: .scale(scale: 0.85).combined(with: .opacity)))
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .buttonStyle(.plain).help(card.kind.tooltipText)
         .disabled(isVoiceSpeaking || isAIPlaying || game.currentPlayerID != 0 || game.phase != .action)
-        .onHover { hovering in hoveredCardID = hovering ? card.id : nil }
+        .onHover { isHovering in hoveredCardID = isHovering ? card.id : nil }
+        .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.72), value: hovering)
+        .onDrag {
+            draggedCardID = card.id
+            return NSItemProvider(object: String(card.id) as NSString)
+        }
+        .onDrop(of: [UTType.text], delegate: HandCardDropDelegate(
+            targetID: card.id, orderedIDs: $handOrder, draggedID: $draggedCardID, reduceMotion: reduceMotion
+        ))
+        .contextMenu {
+            Button { moveCard(card.id, by: -1) } label: { Label("向左移动", systemImage: "arrow.left") }
+                .disabled(!canMoveCard(card.id, by: -1))
+            Button { moveCard(card.id, by: 1) } label: { Label("向右移动", systemImage: "arrow.right") }
+                .disabled(!canMoveCard(card.id, by: 1))
+        }
         .accessibilityLabel("\(card.title)，手牌编号 \(card.id)")
-        .accessibilityHint("点击选择这张牌；需要目标的牌再点桌面上高亮的角色。")
+        .accessibilityHint("点击选择；拖动可调整手牌顺序，也可打开操作菜单移动。需要目标时再点桌面上高亮的角色。")
         .accessibilityIdentifier("card-\(card.id)")
     }
 
@@ -349,11 +368,11 @@ private struct ContentView: View {
                 .font(.footnote).foregroundStyle(.white.opacity(0.7))
             cardHoverHelp
             ScrollView(.horizontal) {
-                HStack(spacing: 9) {
+                HStack(spacing: 12) {
                     ForEach(game.harvestChoices) { card in harvestChoiceButton(card) }
                 }
             }
-            .scrollIndicators(.hidden).frame(height: 154)
+            .scrollIndicators(.hidden).padding(.vertical, 8).frame(height: 222)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -361,27 +380,60 @@ private struct ContentView: View {
     }
 
     private func harvestChoiceButton(_ card: Card) -> some View {
-        Button {
+        let hovering = hoveredCardID == card.id
+        return Button {
             run { try game.chooseHarvest(cardID: card.id, by: 0) }
             startAIPlayback()
         } label: {
-            VStack(spacing: 3) {
-                CardIllustrationView(index: card.kind.illustrationIndex)
-                    .frame(width: 90, height: 108)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                Text(card.title).font(.system(size: 15, weight: .bold, design: .serif)).lineLimit(1)
-                Text(card.category.title).font(.system(size: 10, weight: .medium))
-            }
-            .frame(width: 116, height: 146)
-            .foregroundStyle(.black)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color(red: 0.94, green: 0.91, blue: 0.82)))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.orange.opacity(0.75), lineWidth: 1))
+            cardFace(card, chosen: hovering, isHarvest: true)
+                .scaleEffect(hovering ? 1.07 : 1)
+                .offset(y: hovering ? -6 : 0)
+                .shadow(color: hovering ? .orange.opacity(0.38) : .clear, radius: 14, y: 5)
+                .zIndex(hovering ? 2 : 0)
         }
         .buttonStyle(.plain)
         .onHover { hoveredCardID = $0 ? card.id : nil }
+        .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.72), value: hovering)
         .help(card.kind.tooltipText)
         .disabled(isVoiceSpeaking || isAIPlaying)
         .accessibilityIdentifier("harvest-choice-\(card.id)")
+    }
+
+    private func cardFace(_ card: Card, chosen: Bool, isHarvest: Bool) -> some View {
+        VStack(spacing: 5) {
+            CardIllustrationView(index: card.kind.illustrationIndex)
+                .frame(width: 112, height: 132)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .allowsHitTesting(false)
+            Text(card.title)
+                .font(.system(size: card.title.count > 5 ? 14 : 19, weight: .bold, design: .serif))
+                .lineLimit(1).minimumScaleFactor(0.65)
+            Text(card.category.title).font(.system(size: 11, weight: .medium)).lineLimit(1)
+        }
+        .frame(width: 142, height: 184)
+        .foregroundStyle(isHarvest ? Color.black : card.kind == .dodge ? Color.blue : card.kind == .peach ? Color.red : Color.black)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(red: 0.94, green: 0.91, blue: 0.82)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(chosen ? .orange : .white.opacity(0.5), lineWidth: chosen ? 2.5 : 1))
+    }
+
+    private var orderedHand: [Card] {
+        let byID = Dictionary(uniqueKeysWithValues: game.human.hand.map { ($0.id, $0) })
+        return HandOrder.reconciling(handOrder, with: game.human.hand.map(\.id)).compactMap { byID[$0] }
+    }
+
+    private func canMoveCard(_ id: Int, by offset: Int) -> Bool {
+        guard let index = orderedHand.firstIndex(where: { $0.id == id }) else { return false }
+        return orderedHand.indices.contains(index + offset)
+    }
+
+    private func moveCard(_ id: Int, by offset: Int) {
+        guard canMoveCard(id, by: offset), let index = handOrder.firstIndex(of: id) else { return }
+        let target = index + offset
+        guard handOrder.indices.contains(target) else { return }
+        var reordered = handOrder
+        reordered.swapAt(index, target)
+        if reduceMotion { handOrder = reordered }
+        else { withAnimation(.spring(response: 0.28, dampingFraction: 0.76)) { handOrder = reordered } }
     }
 
     private var cardHoverHelp: some View {
@@ -508,7 +560,7 @@ private struct ContentView: View {
 
     private var handInteractionHint: String {
         if let selectedTargetCard { return "已选【\(selectedTargetCard.title)】；请点桌面上高亮的角色。" }
-        return "悬停卡牌查看作用；点击选择，需要目标时再点桌面上高亮的角色。"
+        return "悬停查看作用；拖动调整顺序（或右键打开移动菜单）；点击选择，需要目标时再点桌面上高亮的角色。"
     }
 
     private var canRespondWithDodge: Bool {
@@ -680,6 +732,28 @@ private struct ContentView: View {
     private func badge(_ title: String, color: Color) -> some View {
         Text(title).font(.system(size: 10, weight: .bold)).padding(.horizontal, 6).padding(.vertical, 3)
             .background(color.opacity(0.2), in: Capsule()).foregroundStyle(color)
+    }
+}
+
+private struct HandCardDropDelegate: DropDelegate {
+    let targetID: Int
+    @Binding var orderedIDs: [Int]
+    @Binding var draggedID: Int?
+    let reduceMotion: Bool
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedID, draggedID != targetID else { return }
+        let reordered = HandOrder.moving(draggedID, before: targetID, in: orderedIDs)
+        guard reordered != orderedIDs else { return }
+        if reduceMotion { orderedIDs = reordered }
+        else { withAnimation(.spring(response: 0.28, dampingFraction: 0.76)) { orderedIDs = reordered } }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedID = nil
+        return true
     }
 }
 

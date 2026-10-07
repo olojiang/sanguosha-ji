@@ -28,6 +28,17 @@ final class GameEngineTests: XCTestCase {
         XCTAssertEqual(fourHealth.human.healthStatus, "4/4")
     }
 
+    func testHandOrderMovesDraggedCardsBeforeTheDropTarget() {
+        XCTAssertEqual(HandOrder.moving(3, before: 1, in: [1, 2, 3]), [3, 1, 2])
+        XCTAssertEqual(HandOrder.moving(1, before: 3, in: [1, 2, 3]), [2, 1, 3])
+        XCTAssertEqual(HandOrder.moving(2, before: 2, in: [1, 2, 3]), [1, 2, 3])
+    }
+
+    func testHandOrderReconciliationKeepsOrderAndAppendsNewCards() {
+        XCTAssertEqual(HandOrder.reconciling([3, 1, 2], with: [1, 2, 4]), [1, 2, 4])
+        XCTAssertEqual(HandOrder.reconciling([3, 1], with: [1, 2, 3, 4]), [3, 1, 2, 4])
+    }
+
     func testVoiceCuesCoverPlayedCardsAndResponsesButSkipPassiveLogLines() {
         let events = [
             "张飞 对 赵云 使用杀。",
