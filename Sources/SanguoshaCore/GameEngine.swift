@@ -105,11 +105,7 @@ public struct GameEngine {
         if case let .awaitingDodge(_, attackerID) = phase { attackerID }
         else { nil }
     }
-    public var cardCounts: [CardCategory: Int] {
-        Dictionary(uniqueKeysWithValues: CardCategory.allCases.map { category in
-            (category, allCards.filter { $0.category == category }.count)
-        })
-    }
+    public var cardCounts: [CardCategory: Int] { StandardDeck.categoryCounts }
     public var responseCardKind: CardKind { requiredResponse }
     public var trickResponseSummary: String? {
         guard let trick = pendingTrick else { return nil }

@@ -470,6 +470,13 @@ final class GameEngineTests: XCTestCase {
         XCTAssertTrue(General.allCases.allSatisfy { $0.skill.contains($0.skillSummary.components(separatedBy: "：")[0]) })
     }
 
+    func testEveryStandardGeneralHasACompleteBeginnerGuide() {
+        XCTAssertEqual(GeneralGuide.all.map(\.general), General.allCases)
+        XCTAssertTrue(GeneralGuide.all.allSatisfy {
+            !$0.strategy.isEmpty && !$0.openingTip.isEmpty && !$0.newPlayerTip.isEmpty && !$0.implementationNote.isEmpty
+        })
+    }
+
     func testFourPlayerGameDealsFourCardsAndStartsWithLord() {
         let game = GameEngine.newGame(seed: 7)
 
@@ -646,6 +653,7 @@ final class GameEngineTests: XCTestCase {
         let game = GameEngine.newGame(seed: 19)
 
         XCTAssertEqual(game.drawPile.count + game.players.reduce(0) { $0 + $1.hand.count }, 108)
+        XCTAssertEqual(StandardDeck.categoryCounts, [.basic: 53, .trick: 36, .equipment: 19])
         XCTAssertEqual(game.cardCounts[.basic], 53)
         XCTAssertEqual(game.cardCounts[.trick], 36)
         XCTAssertEqual(game.cardCounts[.equipment], 19)

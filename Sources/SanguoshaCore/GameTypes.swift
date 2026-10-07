@@ -36,7 +36,7 @@ public enum IdentityConfiguration {
     }
 }
 
-public enum CardCategory: String, CaseIterable, Equatable {
+public enum CardCategory: String, CaseIterable, Equatable, Sendable {
     case basic, trick, equipment
     public var title: String {
         switch self { case .basic: "基本牌"; case .trick: "锦囊"; case .equipment: "装备" }
@@ -194,7 +194,7 @@ public enum Suit: String, CaseIterable, Equatable, Sendable {
     public var isRed: Bool { self == .heart || self == .diamond }
 }
 
-public enum General: String, CaseIterable, Equatable {
+public enum General: String, CaseIterable, Equatable, Hashable, Sendable {
     case caoCao, simaYi, xiahouDun, zhangLiao, xuChu, guoJia, zhenJi
     case liuBei, guanYu, zhangFei, zhugeLiang, zhaoYun, maChao, huangYueYing
     case sunQuan, ganNing, lvMeng, huangGai, zhouYu, daQiao, luXun, sunShangXiang
@@ -429,6 +429,8 @@ enum StandardDeck {
             ranks.flatMap { rank, kinds in kinds.map { Card(id: 0, kind: $0, suit: suit, rank: rank) } }
         }.enumerated().map { Card(id: $0.offset, kind: $0.element.kind, suit: $0.element.suit, rank: $0.element.rank) }
     }()
+
+    static let categoryCounts = Dictionary(grouping: cards, by: \.category).mapValues(\.count)
 }
 
 struct SeededGenerator: RandomNumberGenerator {

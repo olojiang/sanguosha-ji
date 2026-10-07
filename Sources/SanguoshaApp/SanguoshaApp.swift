@@ -51,7 +51,7 @@ private struct ContentView: View {
                 .padding(.bottom, 10)
             }
         }
-        .sheet(isPresented: $showRules) { RulesView().frame(minWidth: 620, minHeight: 620) }
+        .sheet(isPresented: $showRules) { RulesView(general: game.human.general, role: game.human.role) }
         .alert("提示", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("知道了", role: .cancel) { message = nil }
         } message: { Text(message ?? "") }
@@ -891,41 +891,5 @@ private struct CardIllustrationView: View {
             }
         }
         .clipped()
-    }
-}
-
-private struct RulesView: View {
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("第一次玩？从这里开始").font(.system(size: 26, weight: .bold, design: .serif))
-                Text("你可以选择或随机获得身份和武将。支持 4–8 人身份局，主公、忠臣、反贼、内奸的人数会随局人数变化；主公身份公开，其余身份隐藏。观察谁在攻击谁，推理阵营。")
-                ruleSection("胜利目标", "主公和忠臣：消灭反贼与内奸。反贼：杀死主公。内奸：除掉其他人，最后亲手成为唯一生还者。")
-                ruleSection("每回合怎么走", "1. 摸两张牌。  2. 使用手牌。  3. 手牌多于当前体力时，弃到相同数量。然后轮到下一名存活角色。电脑行动会逐步播放，战报会保留并自动滚到最新行动。")
-                ruleSection("基本牌", "杀：攻击攻击范围内角色。每回合通常一张；张飞与诸葛连弩可连续使用。目标可以打闪响应。\n\n闪：响应杀。赵云可以用杀当闪。\n\n桃：出牌阶段回复自己 1 点体力，也能在濒死时救援。标准牌堆不含酒。")
-                ruleSection("锦囊与装备", "标准牌堆包含过河拆桥、顺手牵羊、决斗、南蛮入侵、万箭齐发、桃园结义、无中生有等锦囊，以及武器、防具和进攻马/防御马。选中牌后按提示选目标；装备会放到角色牌旁的装备区，并替换同类装备。")
-                ruleSection("武将与技能", "可选标准版 25 名武将，也可随机抽取；同一局不会重复。武将拥有不同的体力上限和技能，技能说明常驻显示在右侧。目前部分技能效果还在实现中。")
-                ruleSection("怎样判断身份", "反贼通常会攻击主公。忠臣会帮助主公，但也可能暂时不暴露身份。内奸需要控制局势，避免过早成为众矢之的。看行动和出牌，不要只看一次攻击。")
-                ruleSection("牌堆与装备", "标准牌堆共 108 张，含基本牌 53 张、锦囊牌 36 张、装备牌 19 张；每张牌都有标准花色和点数。武器调整攻击范围，进攻马与防御马调整距离。需要打闪时，八卦阵翻开牌堆顶一张牌：红色视为闪并抵消攻击，黑色判定失败并受到伤害；翻出的判定牌会进入弃牌堆。")
-                ruleSection("身份局人数", "4 人：1 主、1 忠、1 反、1 内。5 人：1 主、1 忠、2 反、1 内。6 人：1 主、1 忠、3 反、1 内。7 人：1 主、2 忠、3 反、1 内。8 人：1 主、2 忠、4 反、1 内。")
-                ruleSection("当前规则边界", "闪电与乐不思蜀会按判定牌结算；过河拆桥、顺手牵羊可选目标区域中的具体牌；借刀杀人会让持刀者对你指定的目标出杀或交出武器。仍有缺口：多目标锦囊的无懈可击没有逐目标开窗；多数武将技能和多种武器、防具特效尚未实现。详细清单见项目 README。")
-                Text("规则参考").font(.headline)
-                Link("三国杀官方 FAQ：身份局获胜条件", destination: URL(string: "https://www.sanguosha.com/faq.html")!)
-                Link("三国杀官方模式说明：身份场人数", destination: URL(string: "https://www.sanguosha.com/mode")!)
-                Link("标准版 108 张牌表与 FAQ", destination: URL(string: "https://ks3-cn-beijing.ksyun.com/attachment/74ad98665ac744c138ba8c988d85d149")!)
-                Link("三国杀规则集：基本牌", destination: URL(string: "https://gltjk.com/sanguosha/rules/card/basic.html")!)
-                Link("三国杀规则集：回合流程", destination: URL(string: "https://gltjk.com/sanguosha/rules/flow/game.html")!)
-            }
-            .font(.body).foregroundStyle(.primary.opacity(0.88))
-            .frame(maxWidth: 680, alignment: .leading).padding(28)
-        }
-        .background(Color(red: 0.95, green: 0.92, blue: 0.84)).preferredColorScheme(.light)
-    }
-
-    private func ruleSection(_ title: String, _ detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.headline).foregroundStyle(Color(red: 0.43, green: 0.20, blue: 0.12))
-            Text(detail).fixedSize(horizontal: false, vertical: true)
-        }
     }
 }
