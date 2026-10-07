@@ -357,7 +357,6 @@ private struct ContentView: View {
         .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .scale(scale: 0.75)).combined(with: .opacity), removal: .scale(scale: 0.85).combined(with: .opacity)))
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .buttonStyle(.plain).help(card.kind.tooltipText)
-        .disabled(isVoiceSpeaking || isAIPlaying || game.currentPlayerID != 0 || game.phase != .action)
         .onHover { isHovering in hoveredCardID = isHovering ? card.id : nil }
         .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.72), value: hovering)
         .onDrag {
@@ -374,7 +373,7 @@ private struct ContentView: View {
                 .disabled(!canMoveCard(card.id, by: 1))
         }
         .accessibilityLabel("\(card.title)，手牌编号 \(card.id)")
-        .accessibilityHint("点击选择；拖动可调整手牌顺序，也可打开操作菜单移动。需要目标时再点桌面上高亮的角色。")
+        .accessibilityHint("任何阶段都可拖动整理手牌，或打开操作菜单移动。出牌阶段点击可选择；需要目标时再点桌面上高亮的角色。")
         .accessibilityIdentifier("card-\(card.id)")
     }
 
@@ -538,7 +537,7 @@ private struct ContentView: View {
                 }
                 .accessibilityIdentifier("card-hover-help")
             } else {
-                Text("悬停在任意手牌上，可查看这张牌的作用。")
+                Text("任何阶段都能拖动整理手牌；出牌阶段点击使用。悬停可查看牌的作用。")
                     .font(.caption).foregroundStyle(.white.opacity(0.55))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
