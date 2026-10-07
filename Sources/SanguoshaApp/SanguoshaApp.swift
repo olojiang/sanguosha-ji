@@ -59,7 +59,7 @@ private struct ContentView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text("三国杀 · 入门场").font(.system(size: 26, weight: .bold, design: .serif))
+                Text("三国杀 · 四人身份局").font(.system(size: 26, weight: .bold, design: .serif))
                 Text("你是\(game.human.role.title) · \(game.human.general.title) · 3 位电脑玩家").font(.callout).foregroundStyle(.white.opacity(0.62))
             }
             Spacer()
@@ -706,7 +706,7 @@ private struct RulesView: View {
                 ruleSection("武将与技能", "可选标准版 25 名武将，也可随机抽取；同一局不会重复。武将拥有不同的体力上限和技能，技能说明常驻显示在右侧。目前部分技能效果还在实现中。")
                 ruleSection("怎样判断身份", "反贼通常会攻击主公。忠臣会帮助主公，但也可能暂时不暴露身份。内奸需要控制局势，避免过早成为众矢之的。看行动和出牌，不要只看一次攻击。")
                 ruleSection("牌堆与装备", "标准牌堆共 108 张，含基本牌 53 张、锦囊牌 36 张、装备牌 19 张；每张牌都有标准花色和点数。武器调整攻击范围，进攻马与防御马调整距离。需要打闪时，八卦阵翻开牌堆顶一张牌：红色视为闪并抵消攻击，黑色判定失败并受到伤害；翻出的判定牌会进入弃牌堆。")
-                ruleSection("当前规则边界", "当前武将池覆盖标准版 25 名，但只有部分武将技能已实现。标准牌堆完整；五谷丰登会亮出存活人数对应的牌并依次让角色选择。闪电判定、无懈可击响应、借刀杀人、决斗、部分武器触发和若干武将技能仍未完全按标准流程结算。")
+                ruleSection("当前规则边界", "这是四人身份局，不是另一套‘入门规则’。目前仍有规则缺口：闪电与乐不思蜀没有按牌面判定结算；多目标锦囊的无懈可击没有逐目标开窗；借刀杀人没有完整的出杀/交刀流程；多数武将技能和多种武器、防具特效尚未实现。详细清单见项目 README。")
                 Text("规则参考").font(.headline)
                 Link("三国杀官方 FAQ：身份局获胜条件", destination: URL(string: "https://www.sanguosha.com/faq.html")!)
                 Link("标准版 108 张牌表与 FAQ", destination: URL(string: "https://ks3-cn-beijing.ksyun.com/attachment/74ad98665ac744c138ba8c988d85d149")!)
